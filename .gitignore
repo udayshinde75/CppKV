@@ -1,0 +1,10 @@
+# macOS
+.DS_Store
+
+# Build output (expanded in Phase 1)
+/build/
+/cmake-build-*/
+
+# IDE
+/.idea/
+/.vscode/
