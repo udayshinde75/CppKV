@@ -1,0 +1,87 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "inherits": "base",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "asan-ubsan",
+      "displayName": "Debug + AddressSanitizer + UndefinedBehaviorSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPPKV_SANITIZERS": "address;undefined"
+      }
+    },
+    {
+      "name": "tsan",
+      "displayName": "Debug + ThreadSanitizer",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPPKV_SANITIZERS": "thread"
+      }
+    },
+    {
+      "name": "ci",
+      "displayName": "CI: Debug, warnings as errors",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPPKV_WARNINGS_AS_ERRORS": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug",      "configurePreset": "debug" },
+    { "name": "release",    "configurePreset": "release" },
+    { "name": "asan-ubsan", "configurePreset": "asan-ubsan" },
+    { "name": "tsan",       "configurePreset": "tsan" },
+    { "name": "ci",         "configurePreset": "ci" }
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "timeout": 60 }
+    },
+    { "name": "debug",      "inherits": "base", "configurePreset": "debug" },
+    { "name": "release",    "inherits": "base", "configurePreset": "release" },
+    {
+      "name": "asan-ubsan",
+      "inherits": "base",
+      "configurePreset": "asan-ubsan",
+      "environment": {
+        "ASAN_OPTIONS": "abort_on_error=1:strict_string_checks=1:detect_stack_use_after_return=1",
+        "UBSAN_OPTIONS": "print_stacktrace=1:halt_on_error=1"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "configurePreset": "tsan",
+      "environment": { "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1" }
+    },
+    { "name": "ci",         "inherits": "base", "configurePreset": "ci" }
+  ]
+}

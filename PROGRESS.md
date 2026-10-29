@@ -2,77 +2,85 @@
 
 ## Current phase
 
-**Phase 0 — Requirements and architecture: complete, awaiting approval.**
+**Phase 1 — Project skeleton and build system: complete on Linux; awaiting macOS verification and approval.**
 
 ## Completed
 
-### Phase 0 (2026-10-28)
+### Phase 0 — Requirements and architecture (2026-10-28/29)
 
-- Inspected the development environments (below).
-- Wrote `docs/architecture.md`: requirements, MVP and non-goals, component design, protocol v1 draft,
-  store semantics, concurrency options, persistence draft, error-handling conventions, limits,
-  repository layout, dependency strategy, macOS/Linux concerns, per-phase acceptance criteria, risks.
-- Wrote `README.md` (status-only; no features claimed).
+- Inspected Linux and macOS toolchains (below).
+- `docs/architecture.md`: requirements, MVP/non-goals, components, protocol v1 draft, store semantics,
+  concurrency options, persistence draft, error handling, limits, layout, dependencies, platform concerns,
+  acceptance criteria, risks. Approved by the owner on 2026-10-29 (including sanitizer presets in Phase 1).
 
-## Environment findings
+### Phase 1 — Project skeleton and build system (2026-10-29)
 
-### Linux validation workspace (cloud sandbox) — verified by running commands
+- CMake 3.25…4.4, C++20 without extensions, `CppKV::core` static library + `cppkv-server` executable.
+- `CMakePresets.json`: `debug`, `release`, `asan-ubsan`, `tsan`, `ci` (warnings as errors).
+- `cmake/CompilerWarnings.cmake` (per target), `cmake/Sanitizers.cmake` (directory-wide, validated combinations).
+- Boost via CONFIG-mode `find_package(Boost 1.83)`, `Boost::headers` only, `BOOST_ASIO_NO_DEPRECATED`.
+- GoogleTest 1.17.0 via `FetchContent` (release asset URL + SHA-256, `SYSTEM`), `gtest_discover_tests(PRE_TEST)`.
+- Version generated from `project(VERSION)` into `cppkv/common/version.hpp`.
+- `cppkv-server --version | --help`; unknown options exit with status 2.
+- Tests: 5 unit tests (version decoding), 2 Asio smoke tests (post/run, loopback TCP on an ephemeral port),
+  3 CLI tests (exact exit code checked by `tests/cmake/RunAndCheck.cmake`).
+- `.gitignore`, README build instructions.
 
-| Item | Result |
-|------|--------|
-| OS / arch | Ubuntu 24.04.5 LTS, x86_64, 2 vCPUs, 7.8 GiB RAM |
-| Compilers | GCC 13.3.0, Clang 18.1.3 |
-| Build tools | CMake 3.28.3, Ninja 1.11.1, Git 2.43.0 |
-| Sanitizers | `-fsanitize=address,undefined` and `-fsanitize=thread` compile, link and run (GCC) |
-| Boost | Not installed; Ubuntu apt mirrors unreachable from the sandbox. Boost 1.86.0 release tarball downloads from GitHub (95 MB) — usable for sandbox validation. |
-| GoogleTest | Not installed; GitHub reachable via git (`v1.17.0` tag visible) → `FetchContent` works. |
+## Environment
 
-### macOS development machine (MacBook Air M2) — verified from owner's terminal output (2026-10-29)
+### Linux validation workspace (cloud sandbox)
 
-| Item | Result |
-|------|--------|
-| OS / arch | macOS 27.0.1 (26A434), arm64 |
-| Developer tools | Command Line Tools only (`/Library/Developer/CommandLineTools`); no full Xcode, so no Instruments |
-| Compiler | Apple clang 21.0.0 (clang-2100.3.34.2) |
-| Build tools | CMake 4.4.0, Ninja 1.13.2, Git 2.54.0, Homebrew 7.0.11 |
-| Boost | 1.90.0_1 (Homebrew) |
-| GoogleTest / Benchmark | Not installed via Homebrew → `FetchContent` (as planned) |
-| `ulimit -n` | 2560 (Terminal) |
-| `std::jthread` | Compiles and runs with `-std=c++20` (`JTHREAD_OK`) |
+Ubuntu 24.04.5, x86_64, 2 vCPU. GCC 13.3.0, Clang 18.1.3, CMake 3.28.3 + 4.4.0 (official binary), Ninja 1.11.1.
+Boost 1.83.0 and 1.90.0 installed from release tarballs (apt mirrors are unreachable).
+Clang's sanitizer runtimes (`libclang-rt-18-dev`) are **not installed** and cannot be — so Clang sanitizer builds are
+not tested here.
 
-### Cross-platform checks run in the sandbox
+### macOS development machine (MacBook Air M2) — from owner's terminal output
 
-- Boost 1.90.0 headers (Asio 1.38.0): `boost/asio/io_service.hpp` and `io_context::work` are gone, so only the modern Asio API can be used.
-- GoogleTest `v1.17.0` declares `cmake_minimum_required(VERSION 3.16)`, so it works with CMake 4.
-- Latest Google Benchmark tag upstream: `v1.10.0`.
-- CMake 4 is not installable via pip in the sandbox; Phase 1 will try the official release binary to test the CMake 4 path here as well.
+macOS 27.0.1, arm64, Command Line Tools only (no Instruments), Apple clang 21.0.0, CMake 4.4.0, Ninja 1.13.2,
+Boost 1.90.0 (Homebrew), `ulimit -n` 2560, `std::jthread` works with `-std=c++20`.
 
-## Design decisions (Phase 0)
+## Design decisions
 
-- Pure, socket-free framer / parser / dispatcher / encoder / store; only the session and server touch Asio.
-- Line-based text protocol: LF terminator (optional CR stripped), single-space tokens, `SET` value is the rest of the line,
-  `VALUE <len> <bytes>` responses, `ERR <CODE> <message>` errors.
-- Boost headers only via CONFIG-mode `find_package` (supported range 1.83–1.90); GoogleTest and Google Benchmark via pinned `FetchContent`.
-- `cmake_minimum_required(VERSION 3.25...4.4)` — covers Ubuntu 24.04 (3.28) and the Mac (4.4).
-- Modern Asio API only (`io_context`, `make_work_guard`, free `asio::post`); no `io_service`/`io_context::work`.
-- `std::jthread` allowed (verified on Apple clang 21 and available in GCC 13).
-- Concurrency model deliberately deferred to Phase 5; persistence format drafted for Phase 6.
+- Pure, socket-free framer / parser / dispatcher / encoder / store; only session and server touch Asio.
+- Protocol v1 draft: LF lines (optional CR stripped), single-space tokens, `SET` value = rest of line,
+  `VALUE <len> <bytes>`, `ERR <CODE> <message>`.
+- Supported Boost range 1.83–1.90; modern Asio API only, enforced by `BOOST_ASIO_NO_DEPRECATED`.
+- Warnings applied per target; third-party headers are `SYSTEM`; `-Werror` only in `ci`.
+- `-Wnull-dereference` Clang-only: GCC 13 + Boost 1.83 reported false positives inside Asio at `-O3`.
+- Sanitizers apply to the whole build (including GoogleTest); UBSan is non-recoverable so tests fail on UB.
+- One test executable per test type; tests discovered at CTest time, not build time.
 
 ## Build commands
 
-None yet (Phase 1).
+```bash
+cmake --preset debug && cmake --build --preset debug && ctest --preset debug
+cmake --preset asan-ubsan && cmake --build --preset asan-ubsan && ctest --preset asan-ubsan
+```
 
-## Test results
+## Test results (Phase 1, Linux sandbox, 2026-10-29)
 
-None yet (Phase 1).
+All 10 tests pass in each configuration; 0 warnings from CppKV code.
 
-## Known issues / open decisions
+| Compiler | CMake | Boost | Presets |
+|----------|-------|-------|---------|
+| GCC 13.3 | 3.28.3 | 1.83.0 | debug, release, ci, asan-ubsan, tsan |
+| GCC 13.3 | 4.4.0 | 1.90.0 | release, ci, asan-ubsan, tsan |
+| Clang 18.1 | 3.28.3 | 1.83.0 | ci |
+| Clang 18.1 | 4.4.0 | 1.90.0 | release, ci |
 
-macOS toolchain: verified. Still open (`docs/architecture.md` §16): repository location on the Mac,
-approval of dependency strategy / protocol draft / roadmap adjustments, licence.
+Sanitizer flags verified to detect a heap-buffer-overflow (ASan), a signed overflow (UBSan) and a data race (TSan) with GCC.
+
+macOS (Apple clang 21, CMake 4.4, Boost 1.90): **not yet run** — owner to run the commands above.
+
+## Known issues
+
+- GCC `tsan` builds print `-Wtsan: 'atomic_thread_fence' is not supported with -fsanitize=thread` from Asio's
+  `std_fenced_block`. TSan does not model standalone fences, so it could later report false races inside Asio.
+  To be investigated in Phase 5 (compare with Clang TSan on macOS) before relying on GCC TSan results.
+- Clang sanitizer builds untested on Linux in the sandbox (missing runtime); to be covered on macOS and in CI.
 
 ## Next phase
 
-**Phase 1 — Project skeleton and build system:** CMake + C++20, presets (debug/release/asan-ubsan/tsan),
-warnings, Boost.Asio integration, GoogleTest + CTest, `.gitignore`, minimal executable, first passing test
-on both Linux and macOS.
+**Phase 2 — In-memory key-value store:** `KvStore` with set/get/del/exists/size, documented semantics,
+exception-safety guarantees, comprehensive unit tests. No networking, no concurrency.

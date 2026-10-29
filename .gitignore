@@ -1,10 +1,23 @@
+# Build output (presets write to build/<preset>; CLion's default is cmake-build-*)
+/build/
+/cmake-build-*/
+/out/
+
+# Local, per-developer CMake settings (e.g. CMAKE_PREFIX_PATH for Homebrew)
+/CMakeUserPresets.json
+
+# clangd / tooling
+/compile_commands.json
+/.cache/
+
+# IDEs
+/.idea/
+/.vscode/
+*.swp
+
 # macOS
 .DS_Store
 
-# Build output (expanded in Phase 1)
-/build/
-/cmake-build-*/
-
-# IDE
-/.idea/
-/.vscode/
+# Runtime data (Phase 6 append-only log)
+/data/
+*.log

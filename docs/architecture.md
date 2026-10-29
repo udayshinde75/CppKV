@@ -380,8 +380,10 @@ Three Boost pitfalls to avoid deliberately:
    (`io_context`, `make_work_guard`, free-function `asio::post`), which also exists in 1.83. Phase 1 compiles
    against both 1.83 and 1.90 to keep that true.
 
-Compiler warnings: `-Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wsign-conversion -Wnon-virtual-dtor
--Wold-style-cast -Woverloaded-virtual -Wnull-dereference`; `-Werror` only in CI, so local experiments are not blocked.
+Compiler warnings (see `cmake/CompilerWarnings.cmake`): `-Wall -Wextra -Wpedantic -Wshadow -Wconversion
+-Wsign-conversion -Wnon-virtual-dtor -Wold-style-cast -Woverloaded-virtual` and a few more; `-Wnull-dereference`
+on Clang only (GCC reports false positives inside Asio at `-O3`). `-Werror` only in the `ci` preset, so local
+experiments are not blocked. `BOOST_ASIO_NO_DEPRECATED` makes Boost 1.83 reject the APIs that 1.90 removed.
 
 Build types via `CMakePresets.json`: `debug`, `release`, `asan-ubsan` (ASan + UBSan), `tsan` (TSan; cannot be
 combined with ASan). Tests are registered with CTest through `gtest_discover_tests`.
