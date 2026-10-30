@@ -37,7 +37,7 @@ int run(std::span<char* const> args) {
             return kExitOk;
         }
         std::cerr << "cppkv-server: error: unknown option '" << arg << "'\n\n";
-        print_usage(std::cout);
+        print_usage(std::cerr);
         return kExitUsage;
     }
 

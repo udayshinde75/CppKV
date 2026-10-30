@@ -27,6 +27,7 @@ include(GoogleTest)
 add_executable(cppkv_unit_tests
     unit/build_info_test.cpp
     unit/asio_smoke_test.cpp
+    unit/kv_store_test.cpp
 )
 target_link_libraries(cppkv_unit_tests PRIVATE cppkv_core GTest::gtest_main)
 cppkv_set_warnings(cppkv_unit_tests)

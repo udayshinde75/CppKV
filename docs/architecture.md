@@ -223,17 +223,31 @@ BYE
 
 ---
 
-## 6. Store semantics (Phase 2)
+## 6. Store semantics (Phase 2 — implemented in `src/cppkv/store/kv_store.hpp`)
 
-- `set(key, value)` inserts or replaces; returns nothing meaningful beyond success.
-- `get(key)` → `std::optional<std::string>` (a copy; see below).
-- `del(key)` → `bool` removed; `exists(key)` → `bool`; `size()` → `std::size_t`.
-- Key/value validation happens in the parser, not the store; the store accepts any `std::string`
-  so it stays reusable and simple. The store documents that precondition.
+| Method | Returns | Protocol command |
+|--------|---------|------------------|
+| `bool set(std::string key, std::string value)` | `true` if inserted, `false` if replaced | `SET` |
+| `std::optional<std::string> get(std::string_view key) const` | copy of value, or `nullopt` | `GET` |
+| `bool erase(std::string_view key)` | `true` if the key existed | `DEL` |
+| `bool contains(std::string_view key) const` | presence | `EXISTS` |
+| `std::size_t size() const noexcept` | number of keys | `DBSIZE` |
+
+- Keys and values are arbitrary byte strings (empty allowed, embedded `'\0'` allowed). Validation happens in the
+  parser, not the store, so the store stays rule-free and the persistence layer can replay any record.
+- An empty value is distinct from a missing key (`optional` holding `""` vs `nullopt`).
+- Lookups take `std::string_view` and use C++20 heterogeneous lookup (transparent hash + `std::equal_to<>`), so the
+  Phase 4 parser can look up a key that is a view into the receive buffer without allocating.
+  Heterogeneous `erase(key)` is C++23, so `erase` does `find` + `erase(iterator)`.
+- `set` takes sink parameters by value and moves them in: zero copies for temporaries, one for lvalues.
+- `KvStore` is non-copyable and non-movable: one database per server, and accidental copies would fork the data.
 - `get` returns a copy, not a reference or `string_view`, because once Phase 5 adds concurrency a reference into
   the map could dangle as soon as the lock is released. Copy cost is measured in Phase 8 before anyone optimises it.
 - Exception safety: `set` gives the strong guarantee (if allocation throws, the map is unchanged), which
-  `std::unordered_map::insert_or_assign` provides for a single element.
+  `std::unordered_map::insert_or_assign` provides for a single element; `erase` never throws.
+- Known limitation: `std::hash<std::string_view>` is unseeded in libstdc++ and libc++, so a client who can choose
+  keys could craft many colliding keys and degrade operations to O(n) ("hash flooding"). Acceptable for a
+  loopback-bound educational server; revisit only if the server is exposed or benchmarks show it matters.
 - Thread safety: **none in Phase 2** (documented). Synchronisation is added deliberately in Phase 5.
 
 ---

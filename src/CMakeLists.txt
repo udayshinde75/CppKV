@@ -12,6 +12,7 @@ configure_file(
 
 add_library(cppkv_core STATIC
     cppkv/common/build_info.cpp
+    cppkv/store/kv_store.cpp
 )
 add_library(CppKV::core ALIAS cppkv_core)
 

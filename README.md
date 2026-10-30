@@ -11,8 +11,8 @@ protocol or feature compatibility.
 
 ## Status
 
-**Phase 1 — project skeleton and build system.** The build, test setup and a minimal `cppkv-server --version`
-executable exist; the key-value server itself does not yet.
+**Phase 2 — in-memory key-value store.** The build system, a tested in-memory store (`KvStore`) and a minimal
+`cppkv-server --version` executable exist; networking and the protocol do not yet.
 See [`PROGRESS.md`](PROGRESS.md) for current status and [`docs/architecture.md`](docs/architecture.md) for the design.
 
 ## Planned feature set (v1.0)
