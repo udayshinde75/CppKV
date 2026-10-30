@@ -4,10 +4,9 @@
 
 #include <boost/asio/buffer.hpp>
 #include <boost/asio/error.hpp>
+#include <boost/asio/post.hpp>
 #include <boost/asio/write.hpp>
-#include <boost/system/error_code.hpp>
 
-#include <array>
 #include <exception>
 #include <utility>
 
@@ -16,8 +15,11 @@ namespace asio = boost::asio;
 namespace cppkv {
 
 ClientSession::ClientSession(asio::ip::tcp::socket socket, CommandDispatcher& dispatcher, Logger& logger,
-                             std::size_t max_line_bytes)
-    : socket_{std::move(socket)}, handler_{dispatcher, max_line_bytes}, logger_{logger} {
+                             SessionRegistry& registry, std::size_t max_line_bytes)
+    : socket_{std::move(socket)},
+      handler_{dispatcher, max_line_bytes},
+      logger_{logger},
+      registry_{registry} {
     // remote_endpoint() fails if the client already disconnected; that is not
     // an error worth aborting for, so use the error_code overload.
     boost::system::error_code ec;
@@ -25,83 +27,134 @@ ClientSession::ClientSession(asio::ip::tcp::socket socket, CommandDispatcher& di
     peer_ = ec ? std::string{"unknown"} : format_endpoint(remote);
 }
 
-void ClientSession::run() {
-    logger_.info("client connected peer=" + peer_);
+void ClientSession::start() {
+    // start() is called on the acceptor's strand, not ours. Hop onto our own
+    // strand before touching the socket, so that a concurrent request_close()
+    // can never run at the same time as the first read.
+    asio::post(socket_.get_executor(), [self = shared_from_this()] {
+        if (self->finished_) {
+            return;   // stop() was faster: request_close() already ran on this strand
+        }
+        self->logger_.info("client connected peer=" + self->peer_);
+        self->process({});
+    });
+}
+
+void ClientSession::reject(std::string message) {
+    asio::post(socket_.get_executor(), [self = shared_from_this(), message = std::move(message)]() mutable {
+        if (self->finished_) {
+            return;
+        }
+        self->output_ = std::move(message);
+        self->write_output(ConnectionHandler::Progress::close);
+    });
+}
+
+void ClientSession::request_close() {
+    asio::post(socket_.get_executor(), [self = shared_from_this()] {
+        self->finish("server stopping", LogLevel::info);
+    });
+}
+
+void ClientSession::process(std::string_view new_bytes) {
+    ConnectionHandler::Progress progress{};
     try {
-        serve();
+        if (!new_bytes.empty()) {
+            handler_.feed(new_bytes);
+        }
+        progress = handler_.process(output_, kOutputFlushBytes);
     } catch (const std::exception& e) {
-        // Never let one client's failure escape: report, answer if possible,
-        // close this connection only.
-        logger_.error("internal error peer=" + peer_ + ": " + e.what() + ", closing connection");
-        send("ERR INTERNAL internal server error\r\n");
-        close();
+        // Never let an exception escape into the event loop: it would unwind
+        // io_context::run() on this thread. Answer if possible, close this
+        // connection only.
+        logger_.error("internal error peer=" + peer_ + ": " + e.what());
+        output_ += "ERR INTERNAL internal server error\r\n";
+        progress = ConnectionHandler::Progress::close;
+    }
+
+    if (!output_.empty()) {
+        write_output(progress);
+        return;
+    }
+    continue_after_output(progress);
+}
+
+void ClientSession::write_output(ConnectionHandler::Progress after_write) {
+    // async_write keeps writing until every byte of output_ is sent (or an
+    // error occurs). output_ must not change until the handler runs.
+    asio::async_write(socket_, asio::buffer(output_),
+                      [self = shared_from_this(), after_write](const boost::system::error_code& ec, std::size_t) {
+                          if (self->finished_) {
+                              return;   // closed meanwhile (request_close)
+                          }
+                          if (ec) {
+                              self->finish("write failed: " + ec.message(), LogLevel::warn);
+                              return;
+                          }
+                          self->output_.clear();
+                          self->continue_after_output(after_write);
+                      });
+}
+
+void ClientSession::continue_after_output(ConnectionHandler::Progress progress) {
+    switch (progress) {
+    case ConnectionHandler::Progress::output_ready:
+        process({});   // more requests are buffered; answer the next batch
+        return;
+    case ConnectionHandler::Progress::need_input:
+        read_more();
+        return;
+    case ConnectionHandler::Progress::close: {
+        const std::string_view reason = handler_.close_reason();
+        finish(reason.empty() ? std::string_view{"connection rejected"} : reason, LogLevel::info);
+        return;
+    }
     }
 }
 
-void ClientSession::serve() {
-    std::array<char, kReadChunkBytes> chunk{};
-    std::string output;
-
-    for (;;) {
-        // 1. Answer everything that is already buffered, in bounded batches.
-        //    All responses produced from one read go out in one write() call.
-        ConnectionHandler::Progress progress{};
-        do {
-            progress = handler_.process(output, kOutputFlushBytes);
-            if (!output.empty()) {
-                if (!send(output)) {
-                    return;
+void ClientSession::read_more() {
+    // At most one read is pending at any time, so read_buffer_ is never shared.
+    socket_.async_read_some(
+        asio::buffer(read_buffer_), [self = shared_from_this()](const boost::system::error_code& ec, std::size_t n) {
+            if (self->finished_) {
+                return;   // the socket was closed by request_close(); ec is operation_aborted
+            }
+            if (ec == asio::error::eof) {
+                const std::size_t pending = self->handler_.buffered_bytes();
+                if (pending == 0) {
+                    self->finish("client disconnected", LogLevel::info);
+                } else {
+                    self->finish("client disconnected mid-line, discarding " + std::to_string(pending) + " byte(s)",
+                                 LogLevel::warn);
                 }
-                output.clear();
+                return;
             }
-        } while (progress == ConnectionHandler::Progress::output_ready);
-
-        if (progress == ConnectionHandler::Progress::close) {
-            logger_.info("closing connection peer=" + peer_ + ": " + std::string{handler_.close_reason()});
-            close();
-            return;
-        }
-
-        // 2. Need more input. read_some() returns as soon as *some* bytes have
-        //    arrived — anything from 1 byte to a whole chunk of many requests.
-        boost::system::error_code ec;
-        const std::size_t received = socket_.read_some(asio::buffer(chunk), ec);
-
-        if (ec == asio::error::eof) {
-            if (handler_.buffered_bytes() == 0) {
-                logger_.info("client disconnected peer=" + peer_);
-            } else {
-                logger_.warn("client disconnected mid-line peer=" + peer_ + ", discarding " +
-                             std::to_string(handler_.buffered_bytes()) + " byte(s)");
+            if (ec) {
+                self->finish("read failed: " + ec.message(), LogLevel::warn);
+                return;
             }
-            return;
-        }
-        if (ec) {
-            // connection_reset, timed_out, ...: the client is gone.
-            logger_.warn("read failed peer=" + peer_ + ": " + ec.message());
-            return;
-        }
-
-        handler_.feed(std::string_view{chunk.data(), received});
-    }
+            self->process(std::string_view{self->read_buffer_.data(), n});
+        });
 }
 
-bool ClientSession::send(std::string_view bytes) {
-    boost::system::error_code ec;
-    // asio::write loops until every byte is written: a single send() system
-    // call may accept only part of the data. While the client does not read,
-    // this blocks — natural back-pressure in the synchronous model.
-    asio::write(socket_, asio::buffer(bytes), ec);
-    if (ec) {
-        logger_.warn("write failed peer=" + peer_ + ": " + ec.message());
-        return false;
+void ClientSession::finish(std::string_view reason, LogLevel level) {
+    if (finished_) {
+        return;
     }
-    return true;
-}
+    finished_ = true;
 
-void ClientSession::close() {
-    // Errors are ignored deliberately: the peer may already be gone, and in
-    // every case the file descriptor is released by close().
+    // Release the connection slot BEFORE closing the socket. The client can
+    // only observe the close (EOF) after this point, so a client that reconnects
+    // after seeing EOF is guaranteed to find the slot free.
+    registry_.remove(this);
+
+    logger_.log(level, "connection closed peer=" + peer_ + ": " + std::string{reason});
+
+    // Closing cancels any pending read or write; their handlers run with
+    // operation_aborted, see finished_ == true and return. After that, no
+    // shared_ptr remains and the session is destroyed.
+    // Errors are ignored deliberately: the peer may already be gone, and the
+    // file descriptor is released by close() in every case.
     boost::system::error_code ignored;
     socket_.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
     socket_.close(ignored);

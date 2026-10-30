@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 4 — Protocol parser and command dispatcher (MVP): complete on Linux; awaiting macOS run and approval.**
+**Phase 5 — Concurrent clients: complete on Linux; awaiting macOS run and approval.**
 
 ## Completed
 
@@ -63,6 +63,24 @@
   ~6 MB pipelined output, data shared across connections, store unchanged after QUIT).
 - Mutation checks (each caught): framer CR-at-limit rule, ignoring `closes_connection`, DEL via `contains`,
   SET value trimming, removing the output limit.
+- Verified on macOS (debug, asan-ubsan, tsan: 134/134; ci builds).
+
+### Phase 5 — Concurrent clients (2026-10-30)
+
+- ADR 0002: compared thread-per-connection, pool + blocking I/O, single-thread async, multi-thread async; chose
+  async Asio with one `io_context` on a fixed pool (`--threads`, default 4), a strand per session, one
+  `std::mutex` in `CommandDispatcher`, and `--max-connections` (default 128) → `ERR BUSY`.
+- `ClientSession` rewritten asynchronously: lifetime owned by pending handlers (`shared_from_this`), all
+  handlers on its strand, `request_close()` posts to the strand; exceptions never reach the event loop.
+- `SessionRegistry` (new): mutex-protected weak references; check-and-insert under one lock; slot released before
+  the socket closes (deterministic reuse); `close_and_collect()` for stop.
+- `TcpServer`: acceptor on its own strand; `run()` on N threads with exception-safe event loops; `stop()` closes
+  the listener and every session (no more wake-up connection; connected clients no longer block stop).
+- Tests: registry 5 (incl. 8-thread limit race), dispatcher 8-thread atomicity, config 2; integration 5 new
+  (idle client doesn't block, 16 concurrent clients, 8 concurrent pipelined writers on shared keys, BUSY + slot
+  reuse, stop with connected clients); Phase 3 queued-client test replaced.
+- Data-race demonstration: removing the store lock → TSan reports 90 races in `std::_Hashtable` (unit) and fails
+  the 16-client integration test; restored → clean.
 
 ## Environment
 
@@ -88,6 +106,10 @@
 - `Request` owns its strings: same copy count as views for SET (the store needs owned strings anyway), and no
   lifetime coupling to the receive buffer.
 - Framer returns `string_view` (valid until next `feed`) to avoid a copy per line; the parser copies what it keeps.
+- Concurrency (ADR 0002): async on a fixed thread pool; strand per session; one store mutex held only for the
+  in-memory operation; thread count independent of client count; hard connection cap.
+- GCC `-Wtsan` fence warning: accepted, not worked around (`BOOST_ASIO_DISABLE_FENCED_BLOCK` would change what is
+  tested); no TSan reports observed; Clang TSan on macOS cross-checks.
 
 ## Build commands
 
@@ -108,7 +130,9 @@ ctest --preset debug -L integration          # TCP tests only
 | 2026-10-30 | Linux | Same 12 configurations | Phase 3: 70/70 in every configuration; 0 warnings from CppKV code. Integration suite repeated 100× under ASan+UBSan, TSan and release (Clang): 0 failures, 0 sanitizer reports |
 | 2026-10-30 | macOS | Phase 3: debug, asan-ubsan, tsan, ci | 70/70 each (wildcard-bind test skipped on macOS by design), no sanitizer reports |
 | 2026-10-30 | Linux | Same 12 configurations | Phase 4: 134/134 in every configuration; 0 warnings from CppKV code. Integration suite (34 tests) repeated 100× under ASan+UBSan, TSan and Clang release: 0 failures, 0 sanitizer reports |
-| — | macOS | Phase 4 | **not yet run** |
+| 2026-10-30 | macOS | Phase 4: debug, asan-ubsan, tsan, ci | 134/134 each, no sanitizer reports |
+| 2026-10-30 | Linux | Same 12 configurations | Phase 5: 146/146 in every configuration (incl. GCC TSan ×2); 0 warnings from CppKV code. Integration suite repeated 30× under TSan, 50× under ASan+UBSan, 200× Clang release: 0 failures, 0 sanitizer reports |
+| — | macOS | Phase 5 | **not yet run** |
 
 ## Known issues
 
@@ -118,13 +142,13 @@ ctest --preset debug -L integration          # TCP tests only
 - Strong exception guarantee of `KvStore::set` is argued from the standard, not tested: testing it would need
   allocation-failure injection (a custom allocator), which is not worth the complexity yet.
 - Unseeded string hash → hash-flooding risk if exposed to untrusted clients (documented in architecture §6).
-- Phase 3 server limitations (ADR 0001): one client at a time; `stop()` waits for the active client; no idle
-  timeout; closing with unread data sends RST and may lose the final reply (lingering close planned for Phase 7);
-  persistent `accept()` errors would busy-loop.
+- Remaining server limitations (ADR 0002): no idle timeout (an idle client holds a slot); `stop()` is abrupt
+  (no draining); closing with unread input sends RST and may lose the final reply (also for `ERR BUSY`);
+  persistent `accept()` errors would spin; one store mutex serialises all commands (Phase 8 measures).
 - Ctrl-C terminates the process immediately (exit 130); graceful shutdown is Phase 7.
 
 ## Next phase
 
-**Phase 5 — Concurrent clients:** choose and justify a concurrency model (ADR 0002) against the Phase 4
-single-client baseline; synchronise shared state; bounded connections/threads; concurrent read/write tests;
-TSan on Linux and macOS (including the GCC `-Wtsan` fence question).
+**Phase 6 — Persistence and recovery:** append-only log with length + CRC-framed records written under the
+dispatcher lock before memory is updated; replay on startup; torn-tail and corruption handling; durability
+guarantees per sync policy (`always` with `F_FULLFSYNC` on macOS, `interval`, `never`), documented and tested.

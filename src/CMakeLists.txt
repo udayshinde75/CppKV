@@ -21,6 +21,7 @@ add_library(cppkv_core STATIC
     cppkv/server/client_session.cpp
     cppkv/server/command_dispatcher.cpp
     cppkv/server/connection_handler.cpp
+    cppkv/server/session_registry.cpp
     cppkv/server/tcp_server.cpp
     cppkv/store/kv_store.cpp
 )

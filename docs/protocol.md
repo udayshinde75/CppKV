@@ -15,7 +15,9 @@ CppKV's protocol is its own design. It is not RESP and is not compatible with Re
 - TCP is a byte stream, so requests may arrive split across reads or merged with other requests.
   The server handles both (tests: `LineFramer.EveryTwoWaySplitGivesTheSameLines`,
   `ConnectionHandler.FullSessionSplitAtEveryPairOfPositions`).
-- The server currently serves one connection at a time (ADR 0001); other clients wait.
+- Many connections are served concurrently (ADR 0002), up to `--max-connections` (default 128). Each
+  command is atomic: a `GET` never observes half of a concurrent `SET`. Between different connections, the
+  order of commands is whatever order the server executes them in; within one connection, it is the send order.
 
 ## 2. Requests
 
@@ -104,7 +106,7 @@ Clients should read `VALUE` responses by length: read `VALUE`, the length, one s
 | `INVALID_KEY` | Key breaks the rules in §2.3 | stays open |
 | `PROTOCOL` | Empty token, or CR inside the line | stays open |
 | `TOO_LARGE` | Line longer than 65 536 bytes | **closed** — the rest of the line may still be arriving, so the next request's start cannot be found reliably |
-| `BUSY` | Reserved: connection limit reached (Phase 5/7) | closed |
+| `BUSY` | Connection limit reached: `ERR BUSY too many connections`, sent instead of serving the client | closed |
 | `INTERNAL` | Unexpected server failure (e.g. out of memory) | closed |
 
 A line is checked in this order, and the first failing check decides the error:
@@ -156,7 +158,8 @@ S: OK\r\nOK\r\nINT 2\r\n
 |-------|-------|-----------|
 | Request line | 65 536 bytes | `ERR TOO_LARGE`, connection closed |
 | Key | 512 bytes | `ERR INVALID_KEY` |
-| Pending responses per connection | ~64 KiB per batch | The server produces at most about one batch of responses before writing it out, and does not read new requests while a write is blocked. A client that pipelines requests but never reads the responses therefore stalls the server (one connection at a time, ADR 0001) instead of making it buffer unbounded output |
+| Connections | `--max-connections`, default 128 | `ERR BUSY`, connection closed |
+| Pending responses per connection | ~64 KiB per batch | The server produces at most about one batch of responses before writing it out, and does not read new requests while a write is blocked. A client that pipelines requests but never reads the responses therefore stalls only its own connection, instead of making the server buffer unbounded output |
 
 ## 8. Durability
 

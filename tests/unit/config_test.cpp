@@ -19,6 +19,8 @@ TEST(ParseCommandLine, NoArgumentsRunsServerWithDefaults) {
     EXPECT_EQ(result.config.bind_address, "127.0.0.1");
     EXPECT_EQ(result.config.port, 7379);
     EXPECT_EQ(result.config.max_line_bytes, 65536U);
+    EXPECT_EQ(result.config.io_threads, 4U);
+    EXPECT_EQ(result.config.max_connections, 128U);
     EXPECT_TRUE(result.error.empty());
 }
 
@@ -69,6 +71,25 @@ TEST(ParseCommandLine, VersionAndHelpWinImmediately) {
 
 TEST(ParseCommandLine, LaterOptionOverridesEarlier) {
     EXPECT_EQ(parse({"--port", "1", "--port", "2"}).config.port, 2);
+}
+
+TEST(ParseCommandLine, ParsesThreadsAndMaxConnections) {
+    const auto result = parse({"--threads", "8", "--max-connections", "1000"});
+    ASSERT_EQ(result.action, cppkv::CliAction::run_server) << result.error;
+    EXPECT_EQ(result.config.io_threads, 8U);
+    EXPECT_EQ(result.config.max_connections, 1000U);
+}
+
+TEST(ParseCommandLine, RejectsOutOfRangeThreadsAndConnections) {
+    for (const std::string_view bad : {"0", "65", "-1", "x"}) {
+        EXPECT_EQ(parse({"--threads", bad}).action, cppkv::CliAction::usage_error) << bad;
+    }
+    for (const std::string_view bad : {"0", "10001", "1e3"}) {
+        EXPECT_EQ(parse({"--max-connections", bad}).action, cppkv::CliAction::usage_error) << bad;
+    }
+    EXPECT_EQ(parse({"--threads", "0"}).error, "invalid thread count '0' (expected 1-64)");
+    EXPECT_EQ(parse({"--threads", "1"}).config.io_threads, 1U);
+    EXPECT_EQ(parse({"--max-connections", "10000"}).config.max_connections, 10000U);
 }
 
 } // namespace

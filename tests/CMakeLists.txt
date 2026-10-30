@@ -35,6 +35,7 @@ add_executable(cppkv_unit_tests
     unit/logger_test.cpp
     unit/request_parser_test.cpp
     unit/response_encoder_test.cpp
+    unit/session_registry_test.cpp
 )
 target_link_libraries(cppkv_unit_tests PRIVATE cppkv_core GTest::gtest_main)
 cppkv_set_warnings(cppkv_unit_tests)

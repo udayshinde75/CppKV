@@ -1,7 +1,8 @@
 # CppKV — Architecture and Implementation Plan
 
-Status: **Phase 0 draft (v0.1)** — nothing in this document is implemented yet.
-Every section marked *draft* is a proposal to be confirmed or revised in the phase that implements it.
+Status: **living document**, written in Phase 0 and updated as phases land (currently Phase 5).
+Sections marked *draft* are proposals that the phase implementing them confirms or revises; decisions taken
+are recorded in [`docs/adr/`](adr/), and the protocol is specified in [`docs/protocol.md`](protocol.md).
 
 ---
 
@@ -257,9 +258,13 @@ BYE
 
 ---
 
-## 7. Concurrency (Phase 5 — *decision deferred*)
+## 7. Concurrency (Phase 5 — **decided, see [ADR 0002](adr/0002-concurrency-model.md)**)
 
-The model is chosen in Phase 5 after the single-client server works. Candidates:
+Implemented: async Asio, one `io_context` on a fixed pool of `--threads` threads (default 4), a strand per session,
+one `std::mutex` in `CommandDispatcher` around the store, `--max-connections` (default 128) enforced by
+`SessionRegistry`. The comparison below was the Phase 0 starting point; ADR 0002 contains the full reasoning.
+
+Phase 0 candidates:
 
 | Model | Pros | Cons |
 |-------|------|------|
@@ -268,10 +273,9 @@ The model is chosen in Phase 5 after the single-client server works. Candidates:
 | Async, 1 `io_context` thread | No locks needed on the store; easy to reason about | Uses one core; a slow command (or `fsync`) stalls every client. |
 | Async, N threads + per-session strand + store lock | Parallel; bounded threads | Most complex; needs careful lifetime (`shared_from_this`) and locking. |
 
-Current leaning: async Asio with a small fixed number of `io_context` threads, a per-session strand, and a
-`std::shared_mutex` (or a few mutex shards) around the store — but only after measuring the single-thread
-async version as a baseline. The phase will show a real data race (two sessions calling `unordered_map::operator[]`
-concurrently during a rehash) under TSan, then show the fix.
+Phase 0 leaned towards `std::shared_mutex` or shards. Phase 5 chose a plain `std::mutex` instead: it is the simplest
+correct option, and anything more is an optimisation for Phase 8 to justify with measurements. The data race it
+prevents (concurrent inserts during a rehash) was demonstrated with TSan by removing the lock; see ADR 0002.
 
 ---
 
@@ -319,17 +323,19 @@ Known v1 limitation: no compaction — the log grows with every mutation, and re
 
 ## 10. Configuration and resource limits (Phases 3 and 7)
 
-Command-line flags only (no config-file library). Planned defaults:
+Command-line flags only (no config-file library). Implemented so far: `--bind`, `--port`, `--threads`,
+`--max-connections`. The line limit is fixed at 64 KiB (`ServerConfig::max_line_bytes`), and output is bounded by
+writing responses in ~64 KiB batches (`ClientSession::kOutputFlushBytes`). The rest are planned:
 
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--bind` | `127.0.0.1` | Listen address (loopback by default: there is no auth). |
 | `--port` | `7379` | Listen port. |
-| `--max-connections` | `128` | Above this, new clients get `ERR BUSY` and are closed. Well below the measured fd limits (macOS Terminal 2560, typical Linux 1024). |
+| `--max-connections` | `128` | 1–10 000. Above this, new clients get `ERR BUSY` and are closed (Phase 5). Well below the measured fd limits (macOS Terminal 2560, typical Linux 1024). |
 | `--max-line-bytes` | `65536` | Request size limit. |
 | `--max-output-bytes` | `1 MiB` | Per-client pending-response limit; above it the session stops reading (back-pressure). |
 | `--idle-timeout-ms` | `0` (off) | Close clients idle this long; mitigates slow/partial-line clients. |
-| `--threads` | `1` | I/O threads (meaningful from Phase 5). |
+| `--threads` | `4` | I/O threads, 1–64 (Phase 5). |
 | `--data-dir` | `./data` | Log location (Phase 6). |
 | `--sync` | `always` | Durability policy (Phase 6). |
 | `--log-level` | `info` | `debug`, `info`, `warn`, `error`. |

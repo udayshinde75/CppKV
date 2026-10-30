@@ -1,6 +1,7 @@
 // cppkv-server entry point.
 //
-// Parses --bind/--port, then serves clients one at a time (Phase 3 model).
+// Parses the command line, then serves clients concurrently on a fixed pool
+// of I/O threads (docs/adr/0002-concurrency-model.md).
 // Stop the server with Ctrl-C (graceful shutdown arrives in Phase 7; until
 // then the OS closes the listening socket and any client connection).
 
@@ -30,12 +31,14 @@ constexpr int kExitFailure = EXIT_FAILURE;
 constexpr int kExitUsage = 2;
 
 void print_usage(std::ostream& out) {
-    out << "Usage: cppkv-server [--bind <address>] [--port <port>] [--version] [--help]\n"
+    out << "Usage: cppkv-server [options]\n"
            "\n"
-           "  --bind <address>  IPv4 or IPv6 address to listen on (default 127.0.0.1)\n"
-           "  --port <port>     TCP port, 0-65535; 0 picks a free port (default 7379)\n"
-           "  --version         Print version and build information, then exit\n"
-           "  --help            Print this message, then exit\n";
+           "  --bind <address>         IPv4 or IPv6 address to listen on (default 127.0.0.1)\n"
+           "  --port <port>            TCP port, 0-65535; 0 picks a free port (default 7379)\n"
+           "  --threads <n>            I/O threads, 1-64 (default 4)\n"
+           "  --max-connections <n>    Simultaneous clients, 1-10000 (default 128)\n"
+           "  --version                Print version and build information, then exit\n"
+           "  --help                   Print this message, then exit\n";
 }
 
 int run(std::span<char* const> argv) {

@@ -8,6 +8,10 @@
 
 namespace cppkv {
 
+// Upper bounds accepted on the command line (sanity limits, not tuning advice).
+inline constexpr std::size_t kMaxIoThreads = 64;
+inline constexpr std::size_t kMaxConnectionsLimit = 10'000;
+
 // Runtime settings of the server. Defaults match docs/architecture.md §10.
 struct ServerConfig {
     // Loopback by default: the server has no authentication, so listening on
@@ -20,6 +24,16 @@ struct ServerConfig {
     // Maximum request line length in bytes, excluding the "\n" or "\r\n"
     // terminator. Not yet configurable from the command line (Phase 7).
     std::size_t max_line_bytes = 64 * 1024;
+
+    // Threads running the I/O event loop (and therefore request handling).
+    // A fixed, small pool: the thread count never depends on the number of
+    // clients. 4 is a starting point; Phase 8 measures what works best.
+    std::size_t io_threads = 4;
+
+    // Simultaneous client connections. A further client receives
+    // "ERR BUSY ..." and is disconnected. Kept well below typical
+    // file-descriptor limits (macOS Terminal 2560, Linux often 1024).
+    std::size_t max_connections = 128;
 };
 
 enum class CliAction { run_server, print_version, print_help, usage_error };
@@ -34,7 +48,8 @@ struct CliParseResult {
 // Invalid input is reported as a value (action == usage_error), not as an
 // exception: a typo on the command line is an expected outcome.
 //
-// Supported: --bind <address>, --port <0-65535>, --version, --help / -h.
+// Supported: --bind <address>, --port <0-65535>, --threads <1-64>,
+// --max-connections <1-10000>, --version, --help / -h.
 [[nodiscard]] CliParseResult parse_command_line(std::span<const std::string_view> args);
 
 } // namespace cppkv

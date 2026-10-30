@@ -17,13 +17,31 @@ Response boolean(bool value) {
 } // namespace
 
 Response CommandDispatcher::execute(Request request) {
-    switch (request.command) {
-    case CommandType::ping:
+    // Commands that do not touch the store need no lock.
+    if (request.command == CommandType::ping) {
         return Response::pong();
+    }
+    if (request.command == CommandType::quit) {
+        return Response::bye();
+    }
+
+    // Without this lock, two sessions on different threads could run
+    // store_.set() at the same time. If one insert makes the hash table grow
+    // (rehash), the other thread may follow bucket pointers that are being
+    // rewritten: a data race, i.e. undefined behaviour — lost keys or a crash.
+    // ThreadSanitizer reports exactly this if the lock is removed.
+    //
+    // The lock is held only for the in-memory operation: parsing happened
+    // before, and encoding and socket I/O happen after, without the lock.
+    const std::lock_guard lock{mutex_};
+
+    switch (request.command) {
     case CommandType::set:
         store_.set(std::move(request.key), std::move(request.value));
         return Response::ok();
     case CommandType::get: {
+        // get() copies the value while the lock is held; the Response then owns
+        // its bytes, so no reference into the map escapes the critical section.
         std::optional<std::string> value = store_.get(request.key);
         return value ? Response::value(std::move(*value)) : Response::nil();
     }
@@ -37,8 +55,9 @@ Response CommandDispatcher::execute(Request request) {
         // supported platform; an explicit cast would be "useless" on Linux.
         static_assert(sizeof(std::size_t) <= sizeof(std::uint64_t));
         return Response::integer_value(store_.size());
+    case CommandType::ping:
     case CommandType::quit:
-        return Response::bye();
+        break;   // handled above, without the lock
     }
     return Response::failure(ErrorCode::internal, "unhandled command");   // unreachable
 }

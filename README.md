@@ -11,9 +11,9 @@ protocol or feature compatibility.
 
 ## Status
 
-**Phase 4 — protocol and commands (MVP).** `cppkv-server` listens on TCP and supports `PING`, `SET`, `GET`, `DEL`,
-`EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles fragmented and pipelined input.
-It serves one client at a time; data lives in memory only.
+**Phase 5 — concurrent clients.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads
+and supports `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles
+fragmented and pipelined input. Connections are capped; data lives in memory only.
 See [`PROGRESS.md`](PROGRESS.md) for current status and [`docs/architecture.md`](docs/architecture.md) for the design.
 
 ## Planned feature set (v1.0)
@@ -87,6 +87,7 @@ ctest --preset debug -L integration   # only the TCP tests (labels: unit, integr
 ./build/debug/src/cppkv-server                  # listens on 127.0.0.1:7379
 ./build/debug/src/cppkv-server --port 0         # any free port; the log line shows which
 ./build/debug/src/cppkv-server --bind ::1 --port 7380
+./build/debug/src/cppkv-server --threads 8 --max-connections 500
 ```
 
 Stop it with Ctrl-C. In a second terminal, talk to it with `nc` (installed on macOS and most Linux systems):
@@ -124,8 +125,9 @@ printf 'SET a 1\r\nSET b 2\r\nDBSIZE\r\nQUIT\r\n' | nc 127.0.0.1 7379
 (printf 'SET na'; sleep 1; printf 'me hello\nGET name\n'; sleep 1; printf 'QUIT\n') | nc 127.0.0.1 7379
 ```
 
-The server currently serves **one client at a time**: a second `nc` connects but gets no replies until the
-first one quits. See [ADR 0001](docs/adr/0001-synchronous-iterative-server.md).
+Open several `nc` sessions at once: they are served concurrently and see each other's writes. Once
+`--max-connections` clients are connected, the next one gets `ERR BUSY too many connections`.
+The design is explained in [ADR 0002](docs/adr/0002-concurrency-model.md).
 
 ## IDE notes
 

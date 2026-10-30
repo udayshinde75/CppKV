@@ -2,8 +2,11 @@
 // driven by real TCP clients.
 //
 // Synchronisation: tests never sleep. A test waits only for observable
-// events (a response line, EOF, a joined thread). If the server misbehaves and
-// a read blocks forever, the CTest TIMEOUT property fails the test.
+// events (a response line, EOF, a joined thread). If the server misbehaves,
+// TestClient's 5 s read deadline (and the CTest TIMEOUT) fail the test.
+//
+// The server runs 4 I/O threads, so these tests exercise the concurrent
+// model; built with -fsanitize=thread they double as data-race tests.
 
 #include "test_client.hpp"
 
@@ -18,10 +21,12 @@
 #include <boost/system/system_error.hpp>
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <memory>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace asio = boost::asio;
 using cppkv::test::TestClient;
@@ -30,18 +35,19 @@ namespace {
 
 class ServerTest : public ::testing::Test {
 protected:
-    void start_server(std::size_t max_line_bytes = 1024) {
+    void start_server(std::size_t max_line_bytes = 1024, std::size_t max_connections = 128) {
         cppkv::ServerConfig config;
         config.port = 0;   // OS picks a free port: no collisions between parallel test runs
         config.max_line_bytes = max_line_bytes;
+        config.max_connections = max_connections;
+        config.io_threads = 4;
         server_ = std::make_unique<cppkv::TcpServer>(config, dispatcher_, logger_);
         server_thread_ = std::jthread{[this] { server_->run(); }};
     }
 
-    // Stops the server and waits until run() has returned. After this, the
-    // server thread no longer writes to log_, so the test may read it.
-    // Precondition: no TestClient of the calling test is still connected
-    // (stop() does not interrupt an active session in Phase 3).
+    // Stops the server (closing any connected clients) and waits until run()
+    // has returned. After this, no server thread writes to log_ or store_, so
+    // the test may read them without a data race.
     void stop_server() {
         if (server_) {
             server_->stop();
@@ -189,11 +195,8 @@ TEST_F(ServerTest, ClientDisconnectingMidLineIsLoggedAndServerKeepsRunning) {
         TestClient next{endpoint()};
         next.send("PING\n");
         EXPECT_EQ(next.read_line(), "PONG");
-    }   // `next` disconnects here
+    }
 
-    // stop() waits for the client being served to leave (iterative server),
-    // so every client of this test must be gone before stop_server() — or the
-    // test would wait for itself.
     stop_server();
     EXPECT_NE(log_.str().find("client disconnected mid-line"), std::string::npos) << log_.str();
     EXPECT_NE(log_.str().find("discarding 3 byte(s)"), std::string::npos) << log_.str();
@@ -243,21 +246,159 @@ TEST_F(ServerTest, ManySequentialClients) {
     }
 }
 
-TEST_F(ServerTest, QueuedClientIsServedAfterPreviousClientLeaves) {
-    // Documents the Phase 3 model: one client at a time. The second client's
-    // connection completes (kernel backlog) and its request is buffered, but
-    // it is only answered once the first client has gone.
+// --- Concurrency (Phase 5) ---------------------------------------------------
+
+TEST_F(ServerTest, IdleClientDoesNotBlockOthers) {
+    // In Phase 3 the second client waited until the first one left.
     start_server();
+    TestClient idle{endpoint()};
+    idle.send("PI");   // half a request, then silence
+
+    TestClient busy{endpoint()};
+    busy.send("PING\n");
+    EXPECT_EQ(busy.read_line(), "PONG");
+    busy.send("SET k v\nGET k\n");
+    EXPECT_EQ(busy.read_line(), "OK");
+    EXPECT_EQ(busy.read_line(), "VALUE 1 v");
+
+    idle.send("NG\n");   // the idle client still works afterwards
+    EXPECT_EQ(idle.read_line(), "PONG");
+}
+
+TEST_F(ServerTest, ManyConcurrentClientsReadTheirOwnWrites) {
+    // 16 clients on 16 threads, each writing and reading its own keys while
+    // all of them also overwrite one shared key. Under TSan this is the main
+    // data-race test for the store lock.
+    start_server();
+    constexpr int kClients = 16;
+    constexpr int kKeysPerClient = 200;
+    std::atomic<int> failures{0};
+    {
+        std::vector<std::jthread> threads;
+        for (int c = 0; c < kClients; ++c) {
+            threads.emplace_back([&, c] {
+                try {
+                    TestClient client{endpoint()};
+                    const std::string me = std::to_string(c);
+                    for (int k = 0; k < kKeysPerClient; ++k) {
+                        const std::string key = "c" + me + ":" + std::to_string(k);
+                        const std::string value = "v" + std::to_string(k);
+                        client.send("SET " + key + " " + value + "\nGET " + key + "\nSET shared " + me + "\n");
+                        if (client.read_line() != "OK" ||
+                            client.read_line() != "VALUE " + std::to_string(value.size()) + " " + value ||
+                            client.read_line() != "OK") {
+                            ++failures;
+                            return;
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    ADD_FAILURE() << "client " << c << ": " << e.what();
+                    ++failures;
+                }
+            });
+        }
+    }   // join all clients
+
+    EXPECT_EQ(failures.load(), 0);
+    TestClient checker{endpoint()};
+    checker.send("DBSIZE\nGET shared\n");
+    EXPECT_EQ(checker.read_line(), "INT " + std::to_string(kClients * kKeysPerClient + 1));
+    const std::string shared = checker.read_line();
+    EXPECT_TRUE(shared.starts_with("VALUE 1 ") || shared.starts_with("VALUE 2 ")) << shared;
+}
+
+TEST_F(ServerTest, ConcurrentPipelinedWritersToTheSameKeys) {
+    // 8 clients overwrite the same 50 keys with pipelined bursts. Every SET
+    // must be acknowledged, and afterwards every key holds a value written by
+    // one of the clients (last writer wins; which one is not specified).
+    start_server();
+    constexpr int kClients = 8;
+    constexpr int kKeys = 50;
+    constexpr int kRounds = 10;
+    std::atomic<int> failures{0};
+    {
+        std::vector<std::jthread> threads;
+        for (int c = 0; c < kClients; ++c) {
+            threads.emplace_back([&, c] {
+                try {
+                    TestClient client{endpoint()};
+                    std::string burst;
+                    for (int r = 0; r < kRounds; ++r) {
+                        for (int k = 0; k < kKeys; ++k) {
+                            burst += "SET key" + std::to_string(k) + " writer" + std::to_string(c) + "\n";
+                        }
+                    }
+                    client.send(burst);
+                    for (int i = 0; i < kRounds * kKeys; ++i) {
+                        if (client.read_line() != "OK") {
+                            ++failures;
+                            return;
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    ADD_FAILURE() << "client " << c << ": " << e.what();
+                    ++failures;
+                }
+            });
+        }
+    }
+    EXPECT_EQ(failures.load(), 0);
+
+    stop_server();
+    EXPECT_EQ(store_.size(), static_cast<std::size_t>(kKeys));
+    for (int k = 0; k < kKeys; ++k) {
+        const auto value = store_.get("key" + std::to_string(k));
+        ASSERT_TRUE(value.has_value());
+        EXPECT_TRUE(value->starts_with("writer") && value->size() == 7) << *value;
+    }
+}
+
+TEST_F(ServerTest, ConnectionLimitRejectsWithBusyAndFreesSlotOnClose) {
+    start_server(1024, 2);
     TestClient first{endpoint()};
-    first.send("PING\n");
-    ASSERT_EQ(first.read_line(), "PONG");   // the server is now inside first's session
-
     TestClient second{endpoint()};
+    // A reply proves the session was accepted and counted.
+    first.send("PING\n");
+    ASSERT_EQ(first.read_line(), "PONG");
     second.send("PING\n");
+    ASSERT_EQ(second.read_line(), "PONG");
+    EXPECT_EQ(server_->active_sessions(), 2U);
 
+    {
+        TestClient third{endpoint()};
+        ASSERT_EQ(third.read_line(), "ERR BUSY too many connections");
+        EXPECT_TRUE(third.next_read_is_closed());
+    }
+
+    // A session releases its slot before closing its socket, so once `first`
+    // has seen EOF, a new client is guaranteed to be accepted.
     first.send("QUIT\n");
-    EXPECT_EQ(first.read_line(), "BYE");
-    EXPECT_EQ(second.read_line(), "PONG");
+    ASSERT_EQ(first.read_line(), "BYE");
+    ASSERT_TRUE(first.next_read_is_closed());
+
+    TestClient fourth{endpoint()};
+    fourth.send("PING\n");
+    EXPECT_EQ(fourth.read_line(), "PONG");
+}
+
+TEST_F(ServerTest, StopClosesConnectedClients) {
+    // In Phase 3, stop() waited for connected clients to leave.
+    start_server();
+    TestClient a{endpoint()};
+    TestClient b{endpoint()};
+    // A reply on each connection proves both sessions exist before stop().
+    a.send("PING\n");
+    ASSERT_EQ(a.read_line(), "PONG");
+    b.send("PING\n");
+    ASSERT_EQ(b.read_line(), "PONG");
+    b.send("SET half");   // and leave b in the middle of a request
+    ASSERT_EQ(server_->active_sessions(), 2U);
+
+    stop_server();   // must return although both clients are still connected
+
+    EXPECT_TRUE(a.next_read_is_closed());
+    EXPECT_TRUE(b.next_read_is_closed());
+    EXPECT_NE(log_.str().find("server stopping"), std::string::npos) << log_.str();
 }
 
 // --- Data commands over TCP (Phase 4) ----------------------------------------
@@ -476,7 +617,7 @@ TEST(TcpServer, StopWorksWhenBoundToWildcardAddress) {
     cppkv::TcpServer server{config, dispatcher, logger};
 
     std::jthread runner{[&server] { server.run(); }};
-    server.stop();   // must reach the server via 127.0.0.1
+    server.stop();
     runner.join();
     EXPECT_NE(log.str().find("server stopped"), std::string::npos);
 #endif

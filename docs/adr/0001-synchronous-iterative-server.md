@@ -1,6 +1,7 @@
 # ADR 0001 — Synchronous, iterative TCP server for Phase 3
 
-- **Status:** accepted (Phase 3); to be superseded by the Phase 5 concurrency ADR
+- **Status:** superseded by [ADR 0002](0002-concurrency-model.md) (Phase 5). Kept as the record of the Phase 3–4 design;
+  the limitations below still apply where ADR 0002 says so (RST on close with unread data, no idle timeout).
 - **Date:** 2026-10-30
 
 ## Context
