@@ -1,6 +1,8 @@
 #pragma once
 
 #include "cppkv/common/logger.hpp"
+#include "cppkv/server/command_dispatcher.hpp"
+#include "cppkv/server/connection_handler.hpp"
 
 #include <boost/asio/ip/tcp.hpp>
 
@@ -10,54 +12,55 @@
 
 namespace cppkv {
 
-// Serves one connected client with blocking reads and writes (Phase 3).
+// Serves one connected client with blocking reads and writes.
+//
+// Responsibility: move bytes between the socket and a ConnectionHandler,
+// which contains all protocol logic. The session only does I/O, logging and
+// connection teardown.
 //
 // Ownership and lifetime
-// - The session owns the socket (moved in). When the session is destroyed,
-//   the socket's destructor closes the connection: RAII, no manual cleanup.
-// - `logger` is a non-owning reference; the server's logger outlives every
-//   session by construction (the server creates sessions inside run()).
-//
-// Framing
-// - TCP delivers a byte stream, not messages. The session keeps all received
-//   bytes in `buffer_` and extracts one '\n'-terminated line at a time, so a
-//   request split across several reads, or several requests in one read, are
-//   both handled. Bytes after the extracted line stay buffered.
-//
-// Commands (Phase 3 subset; Phase 4 replaces this with parser + dispatcher)
-// - PING -> "PONG", QUIT -> "BYE" then close, empty line -> no reply,
-//   anything else -> "ERR UNKNOWN_COMMAND ..." (connection stays open).
+// - Owns the socket (moved in) and the ConnectionHandler. When the session is
+//   destroyed, the socket's destructor closes the connection (RAII).
+// - `dispatcher` and `logger` are non-owning references; the server's objects
+//   outlive every session by construction.
 //
 // Errors
-// - Network errors and disconnects end the session and are logged; they are
-//   never thrown. run() can only throw for resource exhaustion
-//   (std::bad_alloc); the server catches that per session.
+// - Network errors and disconnects end the session and are logged; never thrown.
+// - An exception from request handling (only std::bad_alloc is realistic) is
+//   caught here: the client gets "ERR INTERNAL", the connection is closed and
+//   the server carries on with the next client.
 //
 // Thread safety: none needed; a session is used by exactly one thread.
 class ClientSession {
 public:
-    ClientSession(boost::asio::ip::tcp::socket socket, Logger& logger, std::size_t max_line_bytes);
+    // Bytes requested per read() and the output size at which responses are
+    // written out (see ConnectionHandler for why output must be bounded).
+    static constexpr std::size_t kReadChunkBytes = 4096;
+    static constexpr std::size_t kOutputFlushBytes = 64 * 1024;
+
+    ClientSession(boost::asio::ip::tcp::socket socket, CommandDispatcher& dispatcher, Logger& logger,
+                  std::size_t max_line_bytes);
 
     ClientSession(const ClientSession&) = delete;
     ClientSession& operator=(const ClientSession&) = delete;
 
-    // Blocks until the client disconnects, sends QUIT, sends an oversized
-    // line, or a network error occurs.
+    // Blocks until the client disconnects, sends QUIT, violates the protocol
+    // in a way that ends the connection, or a network error occurs.
     void run();
 
 private:
-    // Sends `text` to the client. Returns false (and logs) if the write failed.
-    bool send(std::string_view text);
+    void serve();
 
-    // Sends any pending FIN and releases the socket. Used after QUIT and after
-    // protocol violations that end the connection.
+    // Sends `bytes` to the client. Returns false (and logs) if the write failed.
+    bool send(std::string_view bytes);
+
+    // Sends FIN after queued data and releases the socket.
     void close();
 
     boost::asio::ip::tcp::socket socket_;
+    ConnectionHandler handler_;
     Logger& logger_;
-    const std::size_t max_line_bytes_;
-    std::string peer_;     // "ip:port" of the client, for log messages
-    std::string buffer_;   // received bytes not yet consumed
+    std::string peer_;   // "ip:port" of the client, for log messages
 };
 
 } // namespace cppkv

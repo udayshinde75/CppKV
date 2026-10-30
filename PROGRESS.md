@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 3 — TCP server and client sessions: complete on Linux; awaiting macOS run and approval.**
+**Phase 4 — Protocol parser and command dispatcher (MVP): complete on Linux; awaiting macOS run and approval.**
 
 ## Completed
 
@@ -44,6 +44,25 @@
 - Tests: unit — 9 config, 4 logger (incl. 4-thread concurrency); integration — 25 tests over real TCP
   (`tests/integration/`), client reads have a 5 s deadline so a missing reply fails fast; CLI `cli.invalid_port`.
 - ADR 0001 records the synchronous model and its limitations.
+- Verified on macOS (debug, asan-ubsan, tsan: 70/70, 1 test skipped by design; ci builds).
+
+### Phase 4 — Protocol parser and command dispatcher (2026-10-30)
+
+- `docs/protocol.md`: normative protocol v1 — framing, syntax, key/value rules, responses, error codes and the
+  order in which they are checked, limits, examples.
+- Pure protocol layer (`src/cppkv/protocol/`): `protocol.hpp` (Request, ProtocolError, Response, ErrorCode),
+  `LineFramer` (single-scan framing, early TOO_LARGE, views valid until next feed), `parse_request`
+  (variant result, ASCII-only case folding, unsigned byte checks), `encode_response` (appends; `VALUE <len> <bytes>`).
+- `CommandDispatcher`: executes requests on `KvStore`; Request taken by value so SET moves strings into the store.
+- `ConnectionHandler` (sans-I/O): framer → parser → dispatcher → encoder; output in ~64 KiB batches; nothing
+  executed after QUIT / TOO_LARGE.
+- `ClientSession` reduced to I/O: `read_some` 4 KiB → `feed`; `process` → one `write` per batch; catches
+  exceptions → `ERR INTERNAL` + close. `main` owns `KvStore` and `CommandDispatcher`, passed to `TcpServer`.
+- Tests: framer 18, parser 15, encoder 6, dispatcher 8, handler 8 (incl. every 3-way split of a 14-line
+  session = 7'381 conversations), 9 new TCP tests (all commands, byte-by-byte SET, NUL bytes, 60 KB value,
+  ~6 MB pipelined output, data shared across connections, store unchanged after QUIT).
+- Mutation checks (each caught): framer CR-at-limit rule, ignoring `closes_connection`, DEL via `contains`,
+  SET value trimming, removing the output limit.
 
 ## Environment
 
@@ -65,6 +84,10 @@
 - No process-wide SIGPIPE handler: Asio suppresses SIGPIPE per socket (verified in its sources, covered by a test).
 - Tests synchronise only on observable events; timeouts exist solely as failure detectors (5 s client deadline,
   30 s CTest TIMEOUT on integration tests).
+- Sans-I/O `ConnectionHandler`: protocol behaviour is tested without sockets; Phase 5 can change the I/O model alone.
+- `Request` owns its strings: same copy count as views for SET (the store needs owned strings anyway), and no
+  lifetime coupling to the receive buffer.
+- Framer returns `string_view` (valid until next `feed`) to avoid a copy per line; the parser copies what it keeps.
 
 ## Build commands
 
@@ -72,7 +95,7 @@
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 cmake --preset asan-ubsan && cmake --build --preset asan-ubsan && ctest --preset asan-ubsan
 ctest --preset debug -L integration          # TCP tests only
-./build/debug/src/cppkv-server --port 7379   # then: nc 127.0.0.1 7379
+./build/debug/src/cppkv-server --port 7379   # then: nc 127.0.0.1 7379, try SET/GET
 ```
 
 ## Test results
@@ -83,7 +106,9 @@ ctest --preset debug -L integration          # TCP tests only
 | 2026-10-29 | macOS | Apple clang 21, CMake 4.4, Boost 1.90; debug, asan-ubsan, tsan, ci | Phase 1: 10/10, no sanitizer reports, `ci` builds with `-Werror` |
 | 2026-10-29 | macOS | Phase 2: debug, asan-ubsan, ci | 31/31, no sanitizer reports, `ci` builds |
 | 2026-10-30 | Linux | Same 12 configurations | Phase 3: 70/70 in every configuration; 0 warnings from CppKV code. Integration suite repeated 100× under ASan+UBSan, TSan and release (Clang): 0 failures, 0 sanitizer reports |
-| — | macOS | Phase 3 | **not yet run** |
+| 2026-10-30 | macOS | Phase 3: debug, asan-ubsan, tsan, ci | 70/70 each (wildcard-bind test skipped on macOS by design), no sanitizer reports |
+| 2026-10-30 | Linux | Same 12 configurations | Phase 4: 134/134 in every configuration; 0 warnings from CppKV code. Integration suite (34 tests) repeated 100× under ASan+UBSan, TSan and Clang release: 0 failures, 0 sanitizer reports |
+| — | macOS | Phase 4 | **not yet run** |
 
 ## Known issues
 
@@ -100,5 +125,6 @@ ctest --preset debug -L integration          # TCP tests only
 
 ## Next phase
 
-**Phase 4 — Protocol parser and command dispatcher:** pure `LineFramer`, `RequestParser`, `CommandDispatcher`,
-`ResponseEncoder`; all seven commands over TCP; final `docs/protocol.md`; deterministic fragmentation tests.
+**Phase 5 — Concurrent clients:** choose and justify a concurrency model (ADR 0002) against the Phase 4
+single-client baseline; synchronise shared state; bounded connections/threads; concurrent read/write tests;
+TSan on Linux and macOS (including the GCC `-Wtsan` fence question).

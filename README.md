@@ -11,8 +11,9 @@ protocol or feature compatibility.
 
 ## Status
 
-**Phase 3 — TCP server.** `cppkv-server` listens on TCP, serves one client at a time and answers `PING` and
-`QUIT`. A tested in-memory store (`KvStore`) exists but is not yet reachable over the network (Phase 4).
+**Phase 4 — protocol and commands (MVP).** `cppkv-server` listens on TCP and supports `PING`, `SET`, `GET`, `DEL`,
+`EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles fragmented and pipelined input.
+It serves one client at a time; data lives in memory only.
 See [`PROGRESS.md`](PROGRESS.md) for current status and [`docs/architecture.md`](docs/architecture.md) for the design.
 
 ## Planned feature set (v1.0)
@@ -37,7 +38,7 @@ Targets: macOS on Apple Silicon (development) and Linux (validation).
 
 - [`docs/architecture.md`](docs/architecture.md) — requirements, components, protocol draft, phase plan, risks
 - [`docs/adr/`](docs/adr/) — architecture decision records
-- `docs/protocol.md` — wire protocol specification (Phase 4)
+- [`docs/protocol.md`](docs/protocol.md) — wire protocol specification: requests, responses, errors, limits
 
 ## Build
 
@@ -94,24 +95,33 @@ Stop it with Ctrl-C. In a second terminal, talk to it with `nc` (installed on ma
 $ nc 127.0.0.1 7379
 PING
 PONG
-ping
-PONG
-PING extra
-ERR WRONG_ARGS 'PING' takes no arguments
-SET name hello
-ERR UNKNOWN_COMMAND unknown command 'SET'
+SET city Frankfurt am Main
+OK
+GET city
+VALUE 17 Frankfurt am Main
+GET nope
+NIL
+EXISTS city
+INT 1
+DBSIZE
+INT 1
+DEL city
+INT 1
+FLY away
+ERR UNKNOWN_COMMAND unknown command 'FLY'
 QUIT
 BYE
 ```
 
-`SET` and the other data commands arrive in Phase 4. Two scripted demos:
+`VALUE <len> <bytes>` carries the exact byte length. Full rules: [`docs/protocol.md`](docs/protocol.md).
+Two scripted demos:
 
 ```bash
 # Several requests in one write: one reply each
-printf 'PING\r\nPING\r\nQUIT\r\n' | nc 127.0.0.1 7379
+printf 'SET a 1\r\nSET b 2\r\nDBSIZE\r\nQUIT\r\n' | nc 127.0.0.1 7379
 
 # One request split across writes: the server reassembles it
-(printf 'PI'; sleep 1; printf 'NG\n'; sleep 1; printf 'QUIT\n') | nc 127.0.0.1 7379
+(printf 'SET na'; sleep 1; printf 'me hello\nGET name\n'; sleep 1; printf 'QUIT\n') | nc 127.0.0.1 7379
 ```
 
 The server currently serves **one client at a time**: a second `nc` connects but gets no replies until the

@@ -1,13 +1,15 @@
 // cppkv-server entry point.
 //
-// Phase 3: parses --bind/--port, then serves clients one at a time.
+// Parses --bind/--port, then serves clients one at a time (Phase 3 model).
 // Stop the server with Ctrl-C (graceful shutdown arrives in Phase 7; until
 // then the OS closes the listening socket and any client connection).
 
 #include "cppkv/common/build_info.hpp"
 #include "cppkv/common/config.hpp"
 #include "cppkv/common/logger.hpp"
+#include "cppkv/server/command_dispatcher.hpp"
 #include "cppkv/server/tcp_server.hpp"
+#include "cppkv/store/kv_store.hpp"
 
 #include <boost/system/system_error.hpp>
 
@@ -61,9 +63,14 @@ int run(std::span<char* const> argv) {
     // process with SIGPIPE. Asio already prevents that for its sockets
     // (MSG_NOSIGNAL on Linux, SO_NOSIGPIPE on macOS), so no handler is needed.
 
+    // Declaration order is construction order; destruction runs in reverse.
+    // The server (declared last) is destroyed first, so the dispatcher, store
+    // and logger it refers to are still alive while it shuts down.
     cppkv::Logger logger{std::cerr, cppkv::LogLevel::info};
+    cppkv::KvStore store;
+    cppkv::CommandDispatcher dispatcher{store};
     try {
-        cppkv::TcpServer server{parsed.config, logger};
+        cppkv::TcpServer server{parsed.config, dispatcher, logger};
         server.run();
     } catch (const boost::system::system_error& e) {
         // Most likely "Address already in use" or "Permission denied" (port < 1024).

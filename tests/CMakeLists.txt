@@ -25,11 +25,16 @@ include(GoogleTest)
 # Unit tests: one executable, one source file per component under test.
 # ---------------------------------------------------------------------------
 add_executable(cppkv_unit_tests
-    unit/build_info_test.cpp
     unit/asio_smoke_test.cpp
+    unit/build_info_test.cpp
+    unit/command_dispatcher_test.cpp
     unit/config_test.cpp
+    unit/connection_handler_test.cpp
     unit/kv_store_test.cpp
+    unit/line_framer_test.cpp
     unit/logger_test.cpp
+    unit/request_parser_test.cpp
+    unit/response_encoder_test.cpp
 )
 target_link_libraries(cppkv_unit_tests PRIVATE cppkv_core GTest::gtest_main)
 cppkv_set_warnings(cppkv_unit_tests)

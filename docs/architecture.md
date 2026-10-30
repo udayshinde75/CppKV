@@ -92,14 +92,15 @@ flowchart LR
 | `Logger` | Levelled, timestamped lines to stderr; thread-safe. No external library. | — | 3, 7 |
 | `KvStore` | Map from `std::string` key to `std::string` value. No knowledge of sockets or text. | std | 2 |
 | `LineFramer` | Accumulates bytes; yields complete lines; enforces max line length. Pure, no I/O. | std | 4 |
-| `RequestParser` | Turns one line into a validated `Request` (command + arguments) or a `ParseError`. Pure. | std | 4 |
+| `RequestParser` | `parse_request(line)` → validated `Request` or `ProtocolError` (`std::variant`). Pure. | std | 4 |
 | `CommandDispatcher` | Executes a `Request` against the store (and log), returns a `Response`. No I/O. | KvStore, AppendLog | 4, 6 |
 | `ResponseEncoder` | Serialises a `Response` into wire bytes. Pure. | std | 4 |
-| `ClientSession` | Owns one socket, read/write buffers and the framer; drives read → parse → dispatch → write. | Asio, above | 3, 4, 5 |
+| `ConnectionHandler` | Sans-I/O glue for one connection: `feed(bytes)`, `process(out)` runs framer → parser → dispatcher → encoder with bounded output batches. Added in Phase 4 so that complete protocol behaviour, including every split of the byte stream, is unit-testable without sockets. | all of the above | 4 |
+| `ClientSession` | Owns one socket and a `ConnectionHandler`; only moves bytes (`read_some` 4 KiB → `feed`, `process` → `write`). | Asio, handler | 3, 4, 5 |
 | `TcpServer` | Owns the acceptor; enforces max connections; tracks sessions for shutdown. | Asio | 3, 5, 7 |
 | `AppendLog` | Appends mutation records, syncs per policy, replays and validates on startup. | std, Boost.CRC | 6 |
 
-Design rule: **everything left of `ClientSession` is pure and socket-free.** The framer, parser, dispatcher, encoder
+Design rule (implemented in Phase 4): **everything left of `ClientSession` is pure and socket-free.** The framer, parser, dispatcher, encoder
 and store can each be unit-tested with plain strings. Only `ClientSession` and `TcpServer` touch Asio. This is the
 main structural decision of the project; it is what makes fragmentation and malformed-input behaviour testable
 without a network.
@@ -133,8 +134,9 @@ the referrer, and that is stated in a comment at the declaration.
 
 ## 5. Protocol v1 (*draft — finalised in `docs/protocol.md` in Phase 4*)
 
-Phase 3 implements the framing (§5.2 line rules, §5.3 line limit with `ERR TOO_LARGE`) and only `PING` and `QUIT`;
-every other command name gets `ERR UNKNOWN_COMMAND` until Phase 4.
+**Superseded by [`docs/protocol.md`](protocol.md)** (Phase 4), which is the normative specification. The draft below
+is kept for history; the implemented protocol follows it, with the error check order and the early `TOO_LARGE`
+detection defined precisely in `protocol.md`.
 
 ### 5.1 Why framing matters — a concrete example
 

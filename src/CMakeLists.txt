@@ -14,7 +14,13 @@ add_library(cppkv_core STATIC
     cppkv/common/build_info.cpp
     cppkv/common/config.cpp
     cppkv/common/logger.cpp
+    cppkv/protocol/line_framer.cpp
+    cppkv/protocol/protocol.cpp
+    cppkv/protocol/request_parser.cpp
+    cppkv/protocol/response_encoder.cpp
     cppkv/server/client_session.cpp
+    cppkv/server/command_dispatcher.cpp
+    cppkv/server/connection_handler.cpp
     cppkv/server/tcp_server.cpp
     cppkv/store/kv_store.cpp
 )

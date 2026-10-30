@@ -2,6 +2,7 @@
 
 #include "cppkv/common/config.hpp"
 #include "cppkv/common/logger.hpp"
+#include "cppkv/server/command_dispatcher.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -19,7 +20,8 @@ namespace cppkv {
 // - Owns the io_context and the listening acceptor. Member order matters:
 //   io_ is declared first, so it is constructed before acceptor_ (which needs
 //   it) and destroyed after it.
-// - `logger` is a non-owning reference and must outlive the server.
+// - `dispatcher` and `logger` are non-owning references and must outlive the
+//   server; every session uses the same dispatcher (and so the same store).
 //
 // Thread safety
 // - run() must be called from one thread.
@@ -31,7 +33,7 @@ class TcpServer {
 public:
     // Opens, binds and listens. Throws boost::system::system_error if the
     // address cannot be used (e.g. port already in use): a startup failure.
-    TcpServer(const ServerConfig& config, Logger& logger);
+    TcpServer(const ServerConfig& config, CommandDispatcher& dispatcher, Logger& logger);
 
     TcpServer(const TcpServer&) = delete;
     TcpServer& operator=(const TcpServer&) = delete;
@@ -51,6 +53,7 @@ private:
     boost::asio::io_context io_;
     boost::asio::ip::tcp::acceptor acceptor_;
     const boost::asio::ip::tcp::endpoint local_endpoint_;
+    CommandDispatcher& dispatcher_;
     Logger& logger_;
     const std::size_t max_line_bytes_;
     std::atomic<bool> stop_requested_{false};

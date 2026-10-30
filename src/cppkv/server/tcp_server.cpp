@@ -37,12 +37,13 @@ tcp::endpoint wake_up_endpoint(const tcp::endpoint& listening) {
 
 } // namespace
 
-TcpServer::TcpServer(const ServerConfig& config, Logger& logger)
+TcpServer::TcpServer(const ServerConfig& config, CommandDispatcher& dispatcher, Logger& logger)
     // This acceptor constructor performs open + SO_REUSEADDR + bind + listen
     // and throws on failure. SO_REUSEADDR lets the server restart immediately
     // even while connections from the previous run sit in TIME_WAIT.
     : acceptor_{io_, make_listen_endpoint(config)},
       local_endpoint_{acceptor_.local_endpoint()},
+      dispatcher_{dispatcher},
       logger_{logger},
       max_line_bytes_{config.max_line_bytes} {}
 
@@ -67,7 +68,7 @@ void TcpServer::run() {
         // The session is a local object: it lives exactly as long as the
         // client is being served, and its destructor closes the socket.
         try {
-            ClientSession session{std::move(socket), logger_, max_line_bytes_};
+            ClientSession session{std::move(socket), dispatcher_, logger_, max_line_bytes_};
             session.run();
         } catch (const std::exception& e) {
             // One misbehaving session must not take the whole server down.

@@ -9,7 +9,9 @@
 
 #include "cppkv/common/config.hpp"
 #include "cppkv/common/logger.hpp"
+#include "cppkv/server/command_dispatcher.hpp"
 #include "cppkv/server/tcp_server.hpp"
+#include "cppkv/store/kv_store.hpp"
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
@@ -32,7 +34,7 @@ protected:
         cppkv::ServerConfig config;
         config.port = 0;   // OS picks a free port: no collisions between parallel test runs
         config.max_line_bytes = max_line_bytes;
-        server_ = std::make_unique<cppkv::TcpServer>(config, logger_);
+        server_ = std::make_unique<cppkv::TcpServer>(config, dispatcher_, logger_);
         server_thread_ = std::jthread{[this] { server_->run(); }};
     }
 
@@ -53,16 +55,19 @@ protected:
 
     [[nodiscard]] asio::ip::tcp::endpoint endpoint() const { return server_->local_endpoint(); }
 
-    // Declaration order = construction order: log_ before logger_ (which
-    // references it), server_ before server_thread_ (which uses it). Members
-    // are destroyed in reverse, so the thread is joined before the server dies.
+    // Declaration order = construction order: each member is declared after
+    // everything it references (logger_ -> log_, dispatcher_ -> store_,
+    // server_ -> both, server_thread_ -> server_). Members are destroyed in
+    // reverse, so the thread is joined before the server and store die.
     std::ostringstream log_;
     cppkv::Logger logger_{log_, cppkv::LogLevel::debug};
+    cppkv::KvStore store_;
+    cppkv::CommandDispatcher dispatcher_{store_};
     std::unique_ptr<cppkv::TcpServer> server_;
     std::jthread server_thread_;
 };
 
-// --- Basic commands ----------------------------------------------------------
+// --- PING, errors, case ------------------------------------------------------
 
 TEST_F(ServerTest, PingReturnsPong) {
     start_server();
@@ -255,6 +260,126 @@ TEST_F(ServerTest, QueuedClientIsServedAfterPreviousClientLeaves) {
     EXPECT_EQ(second.read_line(), "PONG");
 }
 
+// --- Data commands over TCP (Phase 4) ----------------------------------------
+
+TEST_F(ServerTest, SetThenGetReturnsValueWithLength) {
+    start_server();
+    TestClient client{endpoint()};
+    client.send("SET city Frankfurt am Main\n");
+    EXPECT_EQ(client.read_line(), "OK");
+    client.send("GET city\n");
+    EXPECT_EQ(client.read_line(), "VALUE 17 Frankfurt am Main");
+}
+
+TEST_F(ServerTest, AllCommandsInOnePipelinedWrite) {
+    start_server();
+    TestClient client{endpoint()};
+    client.send("SET a 1\r\nSET b  two\r\nGET b\nEXISTS a\nEXISTS z\nDBSIZE\nDEL a\nDEL a\nGET a\nSET e \nGET e\n");
+    EXPECT_EQ(client.read_line(), "OK");
+    EXPECT_EQ(client.read_line(), "OK");
+    EXPECT_EQ(client.read_line(), "VALUE 4  two");   // leading space is part of the value
+    EXPECT_EQ(client.read_line(), "INT 1");
+    EXPECT_EQ(client.read_line(), "INT 0");
+    EXPECT_EQ(client.read_line(), "INT 2");
+    EXPECT_EQ(client.read_line(), "INT 1");
+    EXPECT_EQ(client.read_line(), "INT 0");
+    EXPECT_EQ(client.read_line(), "NIL");
+    EXPECT_EQ(client.read_line(), "OK");
+    EXPECT_EQ(client.read_line(), "VALUE 0 ");
+}
+
+TEST_F(ServerTest, SetSentByteByByteIsReassembled) {
+    start_server();
+    TestClient client{endpoint()};
+    for (const char c : std::string{"SET name hello\r\nGET name\r\n"}) {
+        client.send(std::string(1, c));
+    }
+    EXPECT_EQ(client.read_line(), "OK");
+    EXPECT_EQ(client.read_line(), "VALUE 5 hello");
+}
+
+TEST_F(ServerTest, ValueWithNulByteRoundTrips) {
+    using namespace std::string_literals;
+    start_server();
+    TestClient client{endpoint()};
+    client.send("SET bin a\0b\n"s);
+    EXPECT_EQ(client.read_line(), "OK");
+    client.send("GET bin\n");
+    EXPECT_EQ(client.read_line(), "VALUE 3 a\0b"s);
+}
+
+TEST_F(ServerTest, LargeValueRoundTrips) {
+    start_server(64 * 1024);
+    TestClient client{endpoint()};
+    const std::string value(60'000, 'v');
+    client.send("SET big " + value + "\n");
+    EXPECT_EQ(client.read_line(), "OK");
+    client.send("GET big\n");
+    EXPECT_EQ(client.read_line(), "VALUE 60000 " + value);
+}
+
+TEST_F(ServerTest, ManyPipelinedGetsForLargeValueAllArrive) {
+    // ~6 MB of responses for ~1 KB of requests: exercises bounded output
+    // batches and blocking writes while the client is not yet reading.
+    start_server(64 * 1024);
+    TestClient client{endpoint()};
+    const std::string value(30'000, 'v');
+    client.send("SET big " + value + "\n");
+    ASSERT_EQ(client.read_line(), "OK");
+
+    constexpr int kGets = 200;
+    std::string burst;
+    for (int i = 0; i < kGets; ++i) {
+        burst += "GET big\n";
+    }
+    client.send(burst);
+    const std::string expected = "VALUE 30000 " + value;
+    for (int i = 0; i < kGets; ++i) {
+        ASSERT_EQ(client.read_line(), expected) << "response " << i;
+    }
+}
+
+TEST_F(ServerTest, DataIsSharedBetweenConnections) {
+    start_server();
+    {
+        TestClient writer{endpoint()};
+        writer.send("SET shared yes\nQUIT\n");
+        ASSERT_EQ(writer.read_line(), "OK");
+        ASSERT_EQ(writer.read_line(), "BYE");
+    }
+    TestClient reader{endpoint()};
+    reader.send("GET shared\nDBSIZE\n");
+    EXPECT_EQ(reader.read_line(), "VALUE 3 yes");
+    EXPECT_EQ(reader.read_line(), "INT 1");
+}
+
+TEST_F(ServerTest, ProtocolErrorsKeepConnectionOpen) {
+    start_server();
+    TestClient client{endpoint()};
+    client.send("GET\nGET a b\nGET  a\nSET k\nGET bad\x01key\nPI\rNG\nPING\n");
+    EXPECT_EQ(client.read_line(), "ERR WRONG_ARGS 'GET' takes exactly one argument: <key>");
+    EXPECT_EQ(client.read_line(), "ERR WRONG_ARGS 'GET' takes exactly one argument: <key>");
+    EXPECT_EQ(client.read_line(), "ERR PROTOCOL empty token (leading, trailing or repeated space)");
+    EXPECT_EQ(client.read_line(), "ERR WRONG_ARGS 'SET' takes a key and a value");
+    EXPECT_EQ(client.read_line(), "ERR INVALID_KEY key must be 1-512 printable ASCII characters without spaces");
+    EXPECT_EQ(client.read_line(), "ERR PROTOCOL bare CR inside request");
+    EXPECT_EQ(client.read_line(), "PONG");
+}
+
+TEST_F(ServerTest, RequestsAfterQuitDoNotModifyTheStore) {
+    start_server();
+    {
+        TestClient client{endpoint()};
+        client.send("SET before 1\nQUIT\nSET after 2\n");
+        ASSERT_EQ(client.read_line(), "OK");
+        ASSERT_EQ(client.read_line(), "BYE");
+        EXPECT_TRUE(client.next_read_is_closed());
+    }
+    stop_server();   // after this, reading store_ from the test thread is race-free
+    EXPECT_TRUE(store_.contains("before"));
+    EXPECT_FALSE(store_.contains("after"));
+}
+
 // --- Request size limit ------------------------------------------------------
 
 TEST_F(ServerTest, LineAtSizeLimitIsAccepted) {
@@ -277,10 +402,11 @@ TEST_F(ServerTest, TerminatedLineOverSizeLimitIsRejectedAndClosed) {
 TEST_F(ServerTest, UnterminatedLineFillingBufferIsRejectedAndClosed) {
     start_server(16);
     TestClient client{endpoint()};
-    // 18 bytes without '\n' fill the 16 + 2 byte buffer. Exactly 18 so the
-    // server has read everything we sent (see "closing with unread data" in
-    // docs/adr/0001-synchronous-iterative-server.md).
-    client.send(std::string(18, 'x'));
+    // 17 bytes without '\n' (and not ending in '\r') can never become a valid
+    // 16-byte line, so the server rejects them without waiting for more. The
+    // whole burst fits in one server read, so nothing is left unread when the
+    // server closes (see "closing with unread data" in ADR 0001).
+    client.send(std::string(17, 'x'));
     ASSERT_EQ(client.read_line(), "ERR TOO_LARGE request exceeds 16 bytes");
     EXPECT_TRUE(client.next_read_is_closed());
 }
@@ -296,9 +422,11 @@ TEST_F(ServerTest, StopWithoutClientsReturnsPromptly) {
 TEST(TcpServer, StopBeforeRunMakesRunReturnImmediately) {
     std::ostringstream log;
     cppkv::Logger logger{log};
+    cppkv::KvStore store;
+    cppkv::CommandDispatcher dispatcher{store};
     cppkv::ServerConfig config;
     config.port = 0;
-    cppkv::TcpServer server{config, logger};
+    cppkv::TcpServer server{config, dispatcher, logger};
 
     server.stop();
     server.stop();   // idempotent
@@ -309,9 +437,11 @@ TEST(TcpServer, StopBeforeRunMakesRunReturnImmediately) {
 TEST(TcpServer, ReportsTheOsChosenPort) {
     std::ostringstream log;
     cppkv::Logger logger{log};
+    cppkv::KvStore store;
+    cppkv::CommandDispatcher dispatcher{store};
     cppkv::ServerConfig config;
     config.port = 0;
-    const cppkv::TcpServer server{config, logger};
+    const cppkv::TcpServer server{config, dispatcher, logger};
     EXPECT_NE(server.local_endpoint().port(), 0);
     EXPECT_EQ(server.local_endpoint().address().to_string(), "127.0.0.1");
 }
@@ -322,10 +452,12 @@ TEST(TcpServer, ConstructorThrowsWhenPortIsInUse) {
 
     std::ostringstream log;
     cppkv::Logger logger{log};
+    cppkv::KvStore store;
+    cppkv::CommandDispatcher dispatcher{store};
     cppkv::ServerConfig config;
     config.port = occupant.local_endpoint().port();
 
-    EXPECT_THROW(cppkv::TcpServer(config, logger), boost::system::system_error);
+    EXPECT_THROW(cppkv::TcpServer(config, dispatcher, logger), boost::system::system_error);
 }
 
 TEST(TcpServer, StopWorksWhenBoundToWildcardAddress) {
@@ -336,10 +468,12 @@ TEST(TcpServer, StopWorksWhenBoundToWildcardAddress) {
 #else
     std::ostringstream log;
     cppkv::Logger logger{log};
+    cppkv::KvStore store;
+    cppkv::CommandDispatcher dispatcher{store};
     cppkv::ServerConfig config;
     config.bind_address = "0.0.0.0";
     config.port = 0;
-    cppkv::TcpServer server{config, logger};
+    cppkv::TcpServer server{config, dispatcher, logger};
 
     std::jthread runner{[&server] { server.run(); }};
     server.stop();   // must reach the server via 127.0.0.1
