@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 2 — In-memory key-value store: complete on Linux; awaiting macOS run and approval.**
+**Phase 3 — TCP server and client sessions: complete on Linux; awaiting macOS run and approval.**
 
 ## Completed
 
@@ -28,6 +28,22 @@
   missing key, spaces, case sensitivity, binary bytes and embedded NUL, empty key, 1 MiB value, copy
   independence, sink-parameter behaviour, lookup via buffer view, erase semantics, size bookkeeping, 10'000-key rehash.
 - Mutation check: replacing `insert_or_assign` with `try_emplace` (which does not overwrite) makes 2 tests fail.
+- Verified on macOS (debug, asan-ubsan: 31/31; ci builds).
+
+### Phase 3 — TCP server and client sessions (2026-10-30)
+
+- `TcpServer` (`src/cppkv/server/tcp_server.*`): synchronous, iterative; binds/listens in the constructor
+  (throws on failure), `run()` serves one client at a time, thread-safe `stop()` via atomic flag + wake-up connection.
+- `ClientSession` (`client_session.*`): owns the socket; `read_until` on a size-limited `dynamic_buffer` frames
+  '\n'-terminated lines (fragmented and pipelined input), strips an optional CR, enforces 64 KiB line limit
+  (`ERR TOO_LARGE`, then close). Phase 3 commands: `PING`, `QUIT`; others → `ERR UNKNOWN_COMMAND` (sanitised echo).
+  Disconnects, mid-line disconnects, resets and write failures are logged, never thrown.
+- `Logger` (`common/logger.*`): levelled, UTC-timestamped, mutex-protected lines to any `std::ostream`.
+- `parse_command_line` (`common/config.*`): `--bind`, `--port` (strict `from_chars`), `--version`, `--help`;
+  errors as values. `main` reports "cannot listen on …" and exits 1 when the port is in use.
+- Tests: unit — 9 config, 4 logger (incl. 4-thread concurrency); integration — 25 tests over real TCP
+  (`tests/integration/`), client reads have a 5 s deadline so a missing reply fails fast; CLI `cli.invalid_port`.
+- ADR 0001 records the synchronous model and its limitations.
 
 ## Environment
 
@@ -45,12 +61,18 @@
 - Store accepts any bytes; key/value rules are enforced by the parser (Phase 4).
 - `get` returns a copy (safe once concurrency arrives); performance impact to be measured in Phase 8, not assumed.
 - Store method names follow the standard library (`erase`, `contains`); the dispatcher maps `DEL`/`EXISTS` to them.
+- Phase 3 server is synchronous and iterative (ADR 0001); concurrency model decided in Phase 5.
+- No process-wide SIGPIPE handler: Asio suppresses SIGPIPE per socket (verified in its sources, covered by a test).
+- Tests synchronise only on observable events; timeouts exist solely as failure detectors (5 s client deadline,
+  30 s CTest TIMEOUT on integration tests).
 
 ## Build commands
 
 ```bash
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 cmake --preset asan-ubsan && cmake --build --preset asan-ubsan && ctest --preset asan-ubsan
+ctest --preset debug -L integration          # TCP tests only
+./build/debug/src/cppkv-server --port 7379   # then: nc 127.0.0.1 7379
 ```
 
 ## Test results
@@ -59,7 +81,9 @@ cmake --preset asan-ubsan && cmake --build --preset asan-ubsan && ctest --preset
 |------|----------|----------------|--------|
 | 2026-10-29 | Linux | GCC 13.3 / Clang 18.1 × CMake 3.28 / 4.4 × Boost 1.83 / 1.90; debug, release, ci, asan-ubsan (GCC), tsan (GCC) — 12 total | Phase 1: 10/10; Phase 2: 31/31 in every configuration; 0 warnings from CppKV code |
 | 2026-10-29 | macOS | Apple clang 21, CMake 4.4, Boost 1.90; debug, asan-ubsan, tsan, ci | Phase 1: 10/10, no sanitizer reports, `ci` builds with `-Werror` |
-| — | macOS | Phase 2 | **not yet run** |
+| 2026-10-29 | macOS | Phase 2: debug, asan-ubsan, ci | 31/31, no sanitizer reports, `ci` builds |
+| 2026-10-30 | Linux | Same 12 configurations | Phase 3: 70/70 in every configuration; 0 warnings from CppKV code. Integration suite repeated 100× under ASan+UBSan, TSan and release (Clang): 0 failures, 0 sanitizer reports |
+| — | macOS | Phase 3 | **not yet run** |
 
 ## Known issues
 
@@ -69,8 +93,12 @@ cmake --preset asan-ubsan && cmake --build --preset asan-ubsan && ctest --preset
 - Strong exception guarantee of `KvStore::set` is argued from the standard, not tested: testing it would need
   allocation-failure injection (a custom allocator), which is not worth the complexity yet.
 - Unseeded string hash → hash-flooding risk if exposed to untrusted clients (documented in architecture §6).
+- Phase 3 server limitations (ADR 0001): one client at a time; `stop()` waits for the active client; no idle
+  timeout; closing with unread data sends RST and may lose the final reply (lingering close planned for Phase 7);
+  persistent `accept()` errors would busy-loop.
+- Ctrl-C terminates the process immediately (exit 130); graceful shutdown is Phase 7.
 
 ## Next phase
 
-**Phase 3 — TCP server and client sessions:** synchronous Boost.Asio server, `PING`/`QUIT`, clean handling of
-disconnects and network errors, `nc` examples, integration test on an ephemeral port.
+**Phase 4 — Protocol parser and command dispatcher:** pure `LineFramer`, `RequestParser`, `CommandDispatcher`,
+`ResponseEncoder`; all seven commands over TCP; final `docs/protocol.md`; deterministic fragmentation tests.

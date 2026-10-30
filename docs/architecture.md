@@ -113,7 +113,7 @@ single-mutex store with a sharded store.
 | Object | Owner | Lifetime |
 |--------|-------|----------|
 | `asio::io_context`, `TcpServer`, `KvStore`, `AppendLog`, `Logger` | `main` (stack / `std::unique_ptr`) | Whole process; destroyed in reverse order after shutdown completes. |
-| `ClientSession` (sync model, Phase 3) | Local object in the accept loop | One client connection. |
+| `ClientSession` (sync model, Phase 3 — implemented) | Local object in `TcpServer::run()`'s accept loop; owns the socket (moved in) | One client connection; destructor closes the socket. See ADR 0001. |
 | `ClientSession` (async model, Phase 5) | `std::shared_ptr`, kept alive by pending async handlers (`shared_from_this`) | Until the last handler finishes after the socket closes. |
 | Sessions' reference to the store | Non-owning reference; store outlives all sessions by construction | — |
 
@@ -132,6 +132,9 @@ the referrer, and that is stated in a comment at the declaration.
 ---
 
 ## 5. Protocol v1 (*draft — finalised in `docs/protocol.md` in Phase 4*)
+
+Phase 3 implements the framing (§5.2 line rules, §5.3 line limit with `ERR TOO_LARGE`) and only `PING` and `QUIT`;
+every other command name gets `ERR UNKNOWN_COMMAND` until Phase 4.
 
 ### 5.1 Why framing matters — a concrete example
 
@@ -412,7 +415,7 @@ combined with ASan). Tests are registered with CTest through `gtest_discover_tes
 | C++20 library gaps | `std::jthread`/`std::stop_token` **compile and run** with `-std=c++20` (verified). Other libc++ gaps may still exist. | Complete in GCC 13. | `std::jthread` is allowed; any other recent facility gets a quick probe on both platforms before use. |
 | CMake 4 | CMake 4 drops compatibility with projects that declare `cmake_minimum_required` < 3.5; fetched dependencies must declare a modern minimum. CLion may use its bundled CMake rather than Homebrew's. | 3.28 | Pin dependency versions that declare ≥ 3.5 (GoogleTest 1.17: 3.16). In CLion, check which CMake is selected (Settings → Build → Toolchains). |
 | Durable writes | `fsync` does not flush the drive's cache; `F_FULLFSYNC` does. | `fsync`/`fdatasync`. | Platform `#ifdef` in one function in `AppendLog`. |
-| SIGPIPE on write to closed socket | Can kill the process. | Same. | Ignore `SIGPIPE` at startup on both platforms. |
+| SIGPIPE on write to closed socket | Can kill the process. | Same. | Asio already suppresses it for its sockets: `SO_NOSIGPIPE` on macOS (set on every created and accepted socket), `MSG_NOSIGNAL` on Linux (checked in the Asio sources; tested by `ServerSurvivesWritingToResetClient`). Revisit a process-wide `SIG_IGN` in Phase 7 if non-socket pipes appear. |
 | Sanitizers | ASan, UBSan, TSan work; **LeakSanitizer is not supported** on macOS. | All, including LSan. | Leak checks run in Linux CI. |
 | Profiling | Instruments needs full Xcode (only Command Line Tools are installed); `sample` works without it; no Valgrind on Apple Silicon; no `perf`. | `perf`, Valgrind, heaptrack. | Profile on Linux for Phase 8 write-ups; install Xcode only if Instruments becomes worth it. |
 | File descriptor limit | Terminal `ulimit -n` is 2560 (verified); apps launched from the Dock (e.g. CLion) may inherit a different launchd limit. | Commonly 1024. | Defaults stay far below; the server logs its `RLIMIT_NOFILE` at startup (Phase 7); load tests record it. |

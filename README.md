@@ -11,8 +11,8 @@ protocol or feature compatibility.
 
 ## Status
 
-**Phase 2 — in-memory key-value store.** The build system, a tested in-memory store (`KvStore`) and a minimal
-`cppkv-server --version` executable exist; networking and the protocol do not yet.
+**Phase 3 — TCP server.** `cppkv-server` listens on TCP, serves one client at a time and answers `PING` and
+`QUIT`. A tested in-memory store (`KvStore`) exists but is not yet reachable over the network (Phase 4).
 See [`PROGRESS.md`](PROGRESS.md) for current status and [`docs/architecture.md`](docs/architecture.md) for the design.
 
 ## Planned feature set (v1.0)
@@ -36,6 +36,7 @@ Targets: macOS on Apple Silicon (development) and Linux (validation).
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — requirements, components, protocol draft, phase plan, risks
+- [`docs/adr/`](docs/adr/) — architecture decision records
 - `docs/protocol.md` — wire protocol specification (Phase 4)
 
 ## Build
@@ -66,6 +67,7 @@ sudo apt install build-essential cmake ninja-build libboost-dev
 cmake --preset debug          # configure into build/debug
 cmake --build --preset debug  # compile
 ctest --preset debug          # run all tests
+ctest --preset debug -L integration   # only the TCP tests (labels: unit, integration)
 
 ./build/debug/src/cppkv-server --version
 ```
@@ -77,6 +79,45 @@ ctest --preset debug          # run all tests
 | `asan-ubsan` | AddressSanitizer + UndefinedBehaviorSanitizer |
 | `tsan` | ThreadSanitizer (cannot be combined with ASan) |
 | `ci` | Debug with warnings treated as errors |
+
+## Run
+
+```bash
+./build/debug/src/cppkv-server                  # listens on 127.0.0.1:7379
+./build/debug/src/cppkv-server --port 0         # any free port; the log line shows which
+./build/debug/src/cppkv-server --bind ::1 --port 7380
+```
+
+Stop it with Ctrl-C. In a second terminal, talk to it with `nc` (installed on macOS and most Linux systems):
+
+```console
+$ nc 127.0.0.1 7379
+PING
+PONG
+ping
+PONG
+PING extra
+ERR WRONG_ARGS 'PING' takes no arguments
+SET name hello
+ERR UNKNOWN_COMMAND unknown command 'SET'
+QUIT
+BYE
+```
+
+`SET` and the other data commands arrive in Phase 4. Two scripted demos:
+
+```bash
+# Several requests in one write: one reply each
+printf 'PING\r\nPING\r\nQUIT\r\n' | nc 127.0.0.1 7379
+
+# One request split across writes: the server reassembles it
+(printf 'PI'; sleep 1; printf 'NG\n'; sleep 1; printf 'QUIT\n') | nc 127.0.0.1 7379
+```
+
+The server currently serves **one client at a time**: a second `nc` connects but gets no replies until the
+first one quits. See [ADR 0001](docs/adr/0001-synchronous-iterative-server.md).
+
+## IDE notes
 
 **CLion:** open the folder; CLion picks up `CMakePresets.json` and lists the presets as CMake profiles
 (enable the ones you want under *Settings → Build, Execution, Deployment → CMake*).

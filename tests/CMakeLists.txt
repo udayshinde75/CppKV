@@ -27,14 +27,33 @@ include(GoogleTest)
 add_executable(cppkv_unit_tests
     unit/build_info_test.cpp
     unit/asio_smoke_test.cpp
+    unit/config_test.cpp
     unit/kv_store_test.cpp
+    unit/logger_test.cpp
 )
 target_link_libraries(cppkv_unit_tests PRIVATE cppkv_core GTest::gtest_main)
 cppkv_set_warnings(cppkv_unit_tests)
 
 # PRE_TEST: list the tests when CTest runs, not at build time. Building does not
 # execute the test binary, which matters for sanitizer builds and cross-builds.
-gtest_discover_tests(cppkv_unit_tests DISCOVERY_MODE PRE_TEST)
+gtest_discover_tests(cppkv_unit_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS unit)
+
+# ---------------------------------------------------------------------------
+# Integration tests: real TCP connections to an in-process server.
+# TIMEOUT turns a hang (e.g. a read waiting for a reply that never comes) into
+# a test failure, even when ctest is run without a preset.
+# ---------------------------------------------------------------------------
+add_executable(cppkv_integration_tests
+    integration/server_test.cpp
+)
+target_link_libraries(cppkv_integration_tests PRIVATE cppkv_core GTest::gtest_main)
+cppkv_set_warnings(cppkv_integration_tests)
+
+gtest_discover_tests(cppkv_integration_tests
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES LABELS integration TIMEOUT 30)
 
 # ---------------------------------------------------------------------------
 # Executable tests: run the real binary and check its observable behaviour.
@@ -55,4 +74,12 @@ add_test(NAME cli.unknown_option
         "-DARGS=--no-such-flag"
         "-DEXPECTED_EXIT=2"
         "-DEXPECTED_STDERR=unknown option '--no-such-flag'"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAndCheck.cmake")
+
+add_test(NAME cli.invalid_port
+    COMMAND ${CMAKE_COMMAND}
+        "-DCOMMAND=$<TARGET_FILE:cppkv-server>"
+        "-DARGS=--port;65536"
+        "-DEXPECTED_EXIT=2"
+        "-DEXPECTED_STDERR=invalid port '65536'"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAndCheck.cmake")
