@@ -54,6 +54,7 @@ gtest_discover_tests(cppkv_unit_tests
 # a test failure, even when ctest is run without a preset.
 # ---------------------------------------------------------------------------
 add_executable(cppkv_integration_tests
+    integration/operations_test.cpp
     integration/persistence_test.cpp
     integration/server_test.cpp
 )

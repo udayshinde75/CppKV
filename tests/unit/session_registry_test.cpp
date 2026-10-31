@@ -25,7 +25,7 @@ class SessionRegistryTest : public ::testing::Test {
 protected:
     std::shared_ptr<cppkv::ClientSession> make_session(cppkv::SessionRegistry& registry) {
         return std::make_shared<cppkv::ClientSession>(boost::asio::ip::tcp::socket{io_}, dispatcher_, logger_,
-                                                      registry, 1024);
+                                                      registry, cppkv::ClientSession::Options{});
     }
 
     boost::asio::io_context io_;

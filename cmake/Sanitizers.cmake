@@ -43,5 +43,11 @@ function(cppkv_enable_sanitizers sanitizers)
     add_compile_options(${flags})
     add_link_options(-fsanitize=${joined})
 
+    # Lets a test skip itself where a sanitizer's own runtime cannot work
+    # (see OperationsTest.AcceptBacksOffWhenOutOfFileDescriptorsAndRecovers).
+    if("undefined" IN_LIST sanitizers)
+        add_compile_definitions(CPPKV_UBSAN=1)
+    endif()
+
     message(STATUS "CppKV: sanitizers enabled: ${joined}")
 endfunction()

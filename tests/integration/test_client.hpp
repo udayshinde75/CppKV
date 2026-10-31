@@ -27,6 +27,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace cppkv::test {
 
@@ -34,11 +35,56 @@ class TestClient {
 public:
     static constexpr std::chrono::seconds kReadTimeout{5};
 
-    explicit TestClient(const boost::asio::ip::tcp::endpoint& server) : socket_{io_} {
+    explicit TestClient(const boost::asio::ip::tcp::endpoint& server) : socket_{io_} { connect(server); }
+
+    // Two-phase construction: the socket (and its file descriptor) is created
+    // now, the connection later. Used when no new descriptor may be created at
+    // connect time (file-descriptor exhaustion test).
+    struct Deferred {};
+    explicit TestClient(Deferred) : socket_{io_} { socket_.open(boost::asio::ip::tcp::v4()); }
+
+    void connect(const boost::asio::ip::tcp::endpoint& server) {
         socket_.connect(server);   // throws on failure: the test cannot continue
         // Disable Nagle's algorithm so small writes leave immediately, which
         // makes "send in pieces" tests actually send separate segments.
         socket_.set_option(boost::asio::ip::tcp::no_delay{true});
+    }
+
+    enum class Closed { eof, reset };
+
+    // Reads every remaining response line until the server closes, and
+    // reports how it closed: FIN (eof) or RST (reset). Throws on timeout.
+    std::vector<std::string> read_lines_until_closed(Closed& how) {
+        std::vector<std::string> lines;
+        for (;;) {
+            while (true) {
+                const auto end = buffer_.find("\r\n");
+                if (end == std::string::npos) {
+                    break;
+                }
+                lines.push_back(buffer_.substr(0, end));
+                buffer_.erase(0, end + 2);
+            }
+            std::array<char, 65536> scratch{};
+            boost::system::error_code ec;
+            std::size_t n = 0;
+            bool done = false;
+            socket_.async_read_some(boost::asio::buffer(scratch), [&](const boost::system::error_code& e, std::size_t bytes) {
+                ec = e;
+                n = bytes;
+                done = true;
+            });
+            wait_for(done, "the connection to close");
+            buffer_.append(scratch.data(), n);
+            if (ec == boost::asio::error::eof) {
+                how = Closed::eof;
+                return lines;
+            }
+            if (ec) {
+                how = Closed::reset;
+                return lines;
+            }
+        }
     }
 
     void send(std::string_view bytes) { boost::asio::write(socket_, boost::asio::buffer(bytes)); }
@@ -85,6 +131,12 @@ public:
             return false;
         }
         return ec == boost::asio::error::eof || ec == boost::asio::error::connection_reset;
+    }
+
+    // Closes the connection normally (FIN).
+    void close() {
+        boost::system::error_code ignored;
+        socket_.close(ignored);
     }
 
     // Sends FIN: "I will not send more", but keeps reading possible.

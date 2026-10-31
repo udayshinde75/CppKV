@@ -11,12 +11,11 @@ protocol or feature compatibility.
 
 ## Status
 
-**Phase 6 — persistence.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads and
+**Phase 7 — reliability.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads and
 supports `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles
-fragmented and pipelined input. Every change is written to a checksummed append-only log before it is acknowledged,
-so data survives restarts and crashes, with the guarantee per sync policy documented in
-[ADR 0003](docs/adr/0003-persistence.md).
-See [`PROGRESS.md`](PROGRESS.md) for current status and [`docs/architecture.md`](docs/architecture.md) for the design.
+fragmented and pipelined input. Every change is written to a checksummed append-only log before it is acknowledged
+([ADR 0003](docs/adr/0003-persistence.md)). SIGINT/SIGTERM shut it down gracefully; idle and stalled connections
+time out; connection, request and output sizes are bounded ([ADR 0004](docs/adr/0004-operations.md)).
 
 ## Planned feature set (v1.0)
 
@@ -92,6 +91,8 @@ ctest --preset debug -L integration   # only the TCP tests (labels: unit, integr
 ./build/debug/src/cppkv-server --threads 8 --max-connections 500
 ./build/debug/src/cppkv-server --data-dir /tmp/kv --sync interval
 ./build/debug/src/cppkv-server --in-memory      # no persistence
+./build/debug/src/cppkv-server --idle-timeout 60 --shutdown-timeout 5 --log-level debug
+./build/debug/src/cppkv-server --help           # every option, with defaults
 ```
 
 By default the log is `./data/cppkv.log`, relative to the directory you start the server in, and every write is
@@ -99,7 +100,9 @@ By default the log is `./data/cppkv.log`, relative to the directory you start th
 again and `GET` it back. If the log is damaged anywhere except its last record, the server refuses to start and
 says where; `--recovery truncate` keeps the valid part instead.
 
-Stop it with Ctrl-C. In a second terminal, talk to it with `nc` (installed on macOS and most Linux systems):
+Stop it with Ctrl-C (or `kill`, i.e. SIGTERM): connected clients get replies to the requests they already sent,
+then the server closes them, syncs the log and exits with status 0. A second Ctrl-C stops immediately.
+In a second terminal, talk to it with `nc` (installed on macOS and most Linux systems):
 
 ```console
 $ nc 127.0.0.1 7379

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -41,7 +42,10 @@ public:
 
     // Refuses all future additions and returns every session that is still
     // alive, so the caller can ask each one to close. Idempotent.
-    [[nodiscard]] std::vector<std::shared_ptr<ClientSession>> close_and_collect();
+    // `on_drained` (optional) is called once, without the lock held, as soon
+    // as the registry is closed AND empty — immediately if it already is.
+    [[nodiscard]] std::vector<std::shared_ptr<ClientSession>> close_and_collect(
+        std::function<void()> on_drained = {});
 
     [[nodiscard]] std::size_t size() const;
     [[nodiscard]] bool is_closed() const;
@@ -50,6 +54,7 @@ private:
     mutable std::mutex mutex_;
     const std::size_t max_sessions_;
     bool closed_ = false;
+    std::function<void()> on_drained_;   // guarded by mutex_; reset once called
     // Keyed by address: a session removes itself before it is destroyed, so an
     // address cannot be reused by a new session while its old entry exists.
     std::unordered_map<const ClientSession*, std::weak_ptr<ClientSession>> sessions_;

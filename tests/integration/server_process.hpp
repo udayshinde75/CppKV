@@ -105,7 +105,7 @@ public:
 
     // Waits for exit (draining stderr so the child never blocks on a full pipe).
     int wait() {
-        while (read_some_stderr()) {
+        while (stderr_fd_ >= 0 && read_some_stderr()) {
         }
         int status = 0;
         ::waitpid(pid_, &status, 0);
@@ -114,6 +114,28 @@ public:
     }
 
     [[nodiscard]] const std::string& stderr_text() const noexcept { return stderr_; }
+
+    // Blocks until the server has written `text` to stderr. Returns false if
+    // it exited first.
+    bool wait_for_output(const std::string& text) {
+        while (stderr_.find(text) == std::string::npos) {
+            if (!read_some_stderr()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Closes our end of the stderr pipe: the server's next log line then
+    // writes to a pipe without a reader (EPIPE / SIGPIPE).
+    void close_stderr() {
+        if (stderr_fd_ >= 0) {
+            ::close(stderr_fd_);
+            stderr_fd_ = -1;
+        }
+    }
+
+    void send_signal(int signal) { ::kill(pid_, signal); }
 
 private:
     // Appends available stderr bytes. Returns false on EOF.

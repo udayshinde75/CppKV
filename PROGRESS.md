@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 6 — Persistence and recovery: complete on Linux; awaiting macOS run and approval.**
+**Phase 7 — Reliability and operational behaviour: complete on Linux; awaiting macOS run and approval.**
 
 ## Completed
 
@@ -102,6 +102,28 @@
 - Mutation checks (each caught): apply-before-log, DEL not logged, no partial-record rollback, strict mode
   truncating, zero-tail rule removed, no fail-stop, no sync in `always`.
 - `strace`: `--sync always` → exactly one `fdatasync` per SET; `interval`/`never` → none during a 20-SET burst.
+- Verified on macOS (debug, asan-ubsan, tsan: 180/180 incl. all 34 persistence/crash tests; ci builds).
+
+### Phase 7 — Reliability and operational behaviour (2026-10-31)
+
+- ADR 0004. SIGINT/SIGTERM via `asio::signal_set` → graceful shutdown (stop accepting, answer requests received
+  in full, lingering close), `--shutdown-timeout` (default 10 s) then forced close; a second signal stops
+  immediately; exit 0. Shutdown state on the acceptor's strand; `SessionRegistry` drained callback ends it promptly.
+- Lingering close (FIN, discard input ≤ 2 s / 64 KiB, close) for QUIT, TOO_LARGE, BUSY, shutdown.
+- Per-session I/O timeout (`--idle-timeout`, default 300 s, 0 = off) for idle clients, half requests and stalled
+  readers; implemented by closing, not `cancel()` (a cancel can miss a multi-step async_write — found by mutation
+  testing); stale-timer check via `expiry()`.
+- Accept back-off (100 ms) on EMFILE/ENFILE/ENOBUFS/ENOMEM; SIGPIPE ignored process-wide.
+- `--max-line-bytes`, `--log-level`; startup line with all limits; per-connection `requests=` / `duration_ms=`;
+  shutdown counters; `--help` documents signals and exit status. Exit 1 if the log failed while running.
+- Tests: config 4 (incl. the Phase 6 persistence flags, previously untested), `OperationsTest` 9 (drain invariant,
+  idle clients don't delay shutdown, shutdown timeout, BYE / TOO_LARGE + FIN while the client keeps sending, idle
+  timeout + slot reuse, stalled reader, active client not closed, EMFILE back-off + recovery via RLIMIT_NOFILE),
+  `ProcessTest` 6 (SIGTERM exit 0 + data kept, SIGINT, second signal, closed stderr pipe, port in use → 1,
+  unusable data dir → 1).
+- Mutation checks (caught): bare close, no back-off, SIGPIPE not ignored, drain without answering buffered
+  requests, no I/O timeout, timeout via `cancel()`. Not observable on Linux: lingering vs FIN-first (measured and
+  documented in ADR 0004).
 
 ## Environment
 
@@ -129,6 +151,9 @@
 - Framer returns `string_view` (valid until next `feed`) to avoid a copy per line; the parser copies what it keeps.
 - Concurrency (ADR 0002): async on a fixed thread pool; strand per session; one store mutex held only for the
   in-memory operation; thread count independent of client count; hard connection cap.
+- Operations (ADR 0004): draining never cancels writes (they carry replies to executed requests); timeouts and
+  forced stops close the socket instead of cancelling; lingering close bounded to 2 s / 64 KiB; slot released
+  before FIN.
 - Persistence (ADR 0003): log-before-apply under the same lock as the memory update; default `--sync always`;
   strict recovery by default (damage followed by data refuses startup); fail-stop after any write/sync failure
   (no fsync retries); one server per data directory via flock.
@@ -158,7 +183,10 @@ ctest --preset debug -L integration          # TCP tests only
 | 2026-10-30 | Linux | Same 12 configurations | Phase 5: 146/146 in every configuration (incl. GCC TSan ×2); 0 warnings from CppKV code. Integration suite repeated 30× under TSan, 50× under ASan+UBSan, 200× Clang release: 0 failures, 0 sanitizer reports |
 | 2026-10-30 | macOS | Phase 5: debug, asan-ubsan, tsan (Clang), ci | 146/146 each, no sanitizer reports |
 | 2026-10-30 | Linux | Same 12 configurations | Phase 6: 180/180 in every configuration (incl. GCC TSan ×2, ASan+UBSan ×2); 0 warnings from CppKV code. Persistence + crash tests repeated 30× (GCC, Clang): 0 failures |
-| — | macOS | Phase 6 | **not yet run** |
+| 2026-10-31 | macOS | Phase 6: debug, asan-ubsan, tsan, ci | 180/180 each, no sanitizer reports |
+| 2026-10-31 | Linux | Same 12 configurations | Phase 7: 199/199 in every configuration (the EMFILE test is skipped in the two ASan+UBSan builds, see Known issues); 0 warnings from CppKV code. Operations + process + persistence tests repeated 10× under TSan, 10× under ASan+UBSan, 20× Clang: 0 failures, 0 sanitizer reports |
+| 2026-10-31 | macOS | Phase 7 (1st run): debug, asan-ubsan, tsan | 198/199 in debug and tsan: `AcceptBacksOff…` failed because macOS drops a connection whose `accept()` hit EMFILE (Linux keeps it queued). Test made platform-aware; Linux re-run 199/199, changed test 20/20 |
+| — | macOS | Phase 7 (after fix) | **not yet run** |
 
 ## Known issues
 
@@ -168,18 +196,23 @@ ctest --preset debug -L integration          # TCP tests only
 - Strong exception guarantee of `KvStore::set` is argued from the standard, not tested: testing it would need
   allocation-failure injection (a custom allocator), which is not worth the complexity yet.
 - Unseeded string hash → hash-flooding risk if exposed to untrusted clients (documented in architecture §6).
-- Remaining server limitations (ADR 0002): no idle timeout (an idle client holds a slot); `stop()` is abrupt
-  (no draining); closing with unread input sends RST and may lose the final reply (also for `ERR BUSY`);
-  persistent `accept()` errors would spin; one store mutex serialises all commands (Phase 8 measures).
+- One store mutex serialises all commands, including the fsync under `--sync always` (Phase 8 measures).
 - Persistence limitations (ADR 0003): no compaction (log and restart time grow without bound); under
   `--sync always` every fsync blocks all commands (no group commit yet); power-loss durability is not testable
   here; `interval` is fixed at 1 s (not a CLI flag).
-- `cppkv-server` dies from SIGPIPE if its stderr is a closed pipe (e.g. `cppkv-server 2>&1 | head -1`): Asio
-  suppresses SIGPIPE only for sockets. To be handled with the other signals in Phase 7.
+- `OperationsTest.AcceptBacksOffWhenOutOfFileDescriptorsAndRecovers` is skipped in UBSan builds: with no free file
+  descriptor, UBSan's vptr check fails inside its own runtime ("invalid vptr … memory cannot be printed") — a
+  sanitizer false positive. It runs in debug, release, ci and TSan builds.
+- Found by the first Phase 7 matrix run and fixed: two tests read the server's log while I/O threads could still
+  write to it (TSan: data race in `std::stringbuf`); they now stop the server first.
+- Operations limits (ADR 0004): a client that ignores FIN keeps its socket for ≤ 2 s after the server is done;
+  more than 64 KiB of input after the final reply still ends in RST; timeouts have 1 s granularity; no
+  connection-rate limiting.
 - Ctrl-C terminates the process immediately (exit 130); graceful shutdown is Phase 7.
 
 ## Next phase
 
-**Phase 7 — Reliability and operational behaviour:** graceful shutdown on SIGINT/SIGTERM (stop accepting, drain
-in-flight responses, close sessions, sync and close the log), SIGPIPE handling, idle timeout, lingering close,
-accept-error backoff, `--log-level`, configurable line limit; tests for error paths and resource cleanup.
+**Phase 8 — Performance benchmarking:** Google Benchmark micro-benchmarks for the store, parser and log codec; a
+repeatable closed- and open-loop load generator reporting throughput and p50/p95/p99 latency for several client
+counts and read/write mixes; `--sync always` vs `interval` vs `never`; recorded environment; at least one
+profile-driven observation before any optimisation.

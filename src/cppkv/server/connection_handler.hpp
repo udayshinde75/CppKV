@@ -4,6 +4,7 @@
 #include "cppkv/server/command_dispatcher.hpp"
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 
@@ -45,6 +46,9 @@ public:
     // Bytes of an incomplete request still buffered (for disconnect logging).
     [[nodiscard]] std::size_t buffered_bytes() const noexcept { return framer_.buffered_bytes(); }
 
+    // Non-empty request lines answered so far (for the connection's log line).
+    [[nodiscard]] std::uint64_t requests_handled() const noexcept { return requests_handled_; }
+
     // Why process() returned close, e.g. "client quit". Empty before that.
     [[nodiscard]] std::string_view close_reason() const noexcept { return close_reason_; }
 
@@ -53,6 +57,7 @@ private:
     LineFramer framer_;
     std::size_t max_line_bytes_;
     std::string_view close_reason_;   // always points to a string literal
+    std::uint64_t requests_handled_ = 0;
 };
 
 } // namespace cppkv

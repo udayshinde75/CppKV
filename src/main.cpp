@@ -1,9 +1,8 @@
 // cppkv-server entry point.
 //
-// Parses the command line, then serves clients concurrently on a fixed pool
-// of I/O threads (docs/adr/0002-concurrency-model.md).
-// Stop the server with Ctrl-C (graceful shutdown arrives in Phase 7; until
-// then the OS closes the listening socket and any client connection).
+// Parses the command line, recovers the store from the log, then serves
+// clients concurrently on a fixed pool of I/O threads (ADR 0002) until
+// SIGINT/SIGTERM triggers a graceful shutdown (ADR 0004).
 
 #include "cppkv/common/build_info.hpp"
 #include "cppkv/common/config.hpp"
@@ -14,6 +13,8 @@
 #include "cppkv/store/kv_store.hpp"
 
 #include <boost/system/system_error.hpp>
+
+#include <csignal>
 
 #include <cstddef>
 #include <cstdlib>
@@ -41,6 +42,12 @@ void print_usage(std::ostream& out) {
            "  --port <port>            TCP port, 0-65535; 0 picks a free port (default 7379)\n"
            "  --threads <n>            I/O threads, 1-64 (default 4)\n"
            "  --max-connections <n>    Simultaneous clients, 1-10000 (default 128)\n"
+           "  --max-line-bytes <n>     Longest accepted request line, 16-8388608 (default 65536)\n"
+           "  --idle-timeout <s>       Close connections without progress for s seconds;\n"
+           "                           0 disables (default 300)\n"
+           "  --shutdown-timeout <s>   On SIGINT/SIGTERM, wait up to s seconds for in-flight\n"
+           "                           requests before closing connections (default 10)\n"
+           "  --log-level <level>      debug, info (default), warn or error\n"
            "  --data-dir <path>        Directory of the append-only log (default ./data)\n"
            "  --sync <policy>          always (default): fsync before every OK\n"
            "                           interval: fsync about once per second\n"
@@ -49,7 +56,10 @@ void print_usage(std::ostream& out) {
            "                           before its end; truncate: keep the valid part\n"
            "  --in-memory              No persistence: data is lost when the server stops\n"
            "  --version                Print version and build information, then exit\n"
-           "  --help                   Print this message, then exit\n";
+           "  --help                   Print this message, then exit\n"
+           "\n"
+           "Signals: SIGINT (Ctrl-C) or SIGTERM shut down gracefully; a second one stops immediately.\n"
+           "Exit status: 0 after a clean shutdown, 1 on a startup or runtime failure, 2 on a usage error.\n";
 }
 
 int run(std::span<char* const> argv) {
@@ -73,14 +83,18 @@ int run(std::span<char* const> argv) {
         break;
     }
 
-    // SIGPIPE: writing to a socket whose peer has gone would normally kill the
-    // process with SIGPIPE. Asio already prevents that for its sockets
-    // (MSG_NOSIGNAL on Linux, SO_NOSIGPIPE on macOS), so no handler is needed.
+    // SIGPIPE: writing to a pipe or socket whose reader has gone kills the
+    // process by default. Asio already prevents that for its sockets
+    // (MSG_NOSIGNAL / SO_NOSIGPIPE), but not for stderr: run as
+    // `cppkv-server 2>&1 | head -1`, the first log line after `head` exits
+    // would kill the server. Ignoring SIGPIPE turns that into an EPIPE write
+    // error instead, which std::cerr absorbs.
+    std::signal(SIGPIPE, SIG_IGN);
 
     // Declaration order is construction order; destruction runs in reverse.
     // The server (declared last) is destroyed first, so the dispatcher, log,
     // store and logger it refers to are still alive while it shuts down.
-    cppkv::Logger logger{std::cerr, cppkv::LogLevel::info};
+    cppkv::Logger logger{std::cerr, parsed.config.log_level};
     cppkv::KvStore store;
 
     // Recovery happens before the server accepts its first client, on this
@@ -113,13 +127,23 @@ int run(std::span<char* const> argv) {
     cppkv::CommandDispatcher dispatcher{store, log.get()};
     try {
         cppkv::TcpServer server{parsed.config, dispatcher, logger};
-        server.run();
+        server.handle_signals();
+        server.run();   // returns after a graceful (or forced) shutdown
     } catch (const boost::system::system_error& e) {
         // Most likely "Address already in use" or "Permission denied" (port < 1024).
         logger.error("cannot listen on " + parsed.config.bind_address + ":" +
                      std::to_string(parsed.config.port) + ": " + e.code().message());
         return kExitFailure;
     }
+
+    // Leaving this scope destroys, in order: the dispatcher, then the log
+    // (its destructor stops the interval-sync thread and syncs once more),
+    // then the store. Every acknowledged write is already in the log.
+    if (log && !log->healthy()) {
+        logger.error("exiting after log failure: " + log->failure_reason());
+        return kExitFailure;
+    }
+    logger.info("shutdown complete");
     return kExitOk;
 }
 

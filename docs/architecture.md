@@ -328,9 +328,11 @@ Known v1 limitation: no compaction — the log grows with every mutation, and re
 
 ## 10. Configuration and resource limits (Phases 3 and 7)
 
-Command-line flags only (no config-file library). Implemented so far: `--bind`, `--port`, `--threads`,
-`--max-connections`. The line limit is fixed at 64 KiB (`ServerConfig::max_line_bytes`), and output is bounded by
-writing responses in ~64 KiB batches (`ClientSession::kOutputFlushBytes`). The rest are planned:
+Command-line flags only (no config-file library). **All implemented by Phase 7** (`cppkv-server --help` is the
+reference). Differences from the Phase 0 plan: there is no `--max-output-bytes`, because output is bounded by
+writing responses in ~64 KiB batches (`ClientSession::kOutputFlushBytes`) and a stalled reader is closed by
+`--idle-timeout`; the defaults below were revised (idle timeout 300 s instead of off, 4 threads); and
+`--shutdown-timeout`, `--recovery` and `--in-memory` were added. Phase 0 table, for reference:
 
 | Flag | Default | Purpose |
 |------|---------|---------|

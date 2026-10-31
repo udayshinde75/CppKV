@@ -76,12 +76,11 @@ Resolved from ADR 0001:
 - `stop()` closes connected clients immediately (test `StopClosesConnectedClients`).
 - Threads are bounded by configuration, never by the number of clients.
 
-Still open (Phase 7 unless noted):
-- **No idle timeout:** an idle client holds one of the connection slots indefinitely.
-- **`stop()` is abrupt:** in-flight responses may be cut off. Graceful draining is Phase 7.
-- **Closing with unread input sends RST** (ADR 0001); this also applies to `ERR BUSY` if the rejected client has
-  already sent data. A lingering close is Phase 7.
-- **Persistent `accept()` errors** (e.g. `EMFILE`) are retried immediately, which could spin.
+Still open after Phase 5 (all but the last were resolved in Phase 7, see [ADR 0004](0004-operations.md)):
+- ~~No idle timeout~~ → `--idle-timeout`.
+- ~~`stop()` is abrupt~~ → `shutdown()` drains; `stop()` remains the immediate variant.
+- ~~Closing with unread input sends RST~~ → lingering close.
+- ~~Persistent `accept()` errors spin~~ → 100 ms back-off on resource exhaustion.
 - **The store lock serialises all commands.** That's fine at this scale; Phase 8 measures contention.
 
 ## Validation

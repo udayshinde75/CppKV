@@ -68,7 +68,8 @@ CliParseResult parse_command_line(std::span<const std::string_view> args) {
         }
 
         if (arg != "--port" && arg != "--bind" && arg != "--threads" && arg != "--max-connections" &&
-            arg != "--data-dir" && arg != "--sync" && arg != "--recovery") {
+            arg != "--max-line-bytes" && arg != "--idle-timeout" && arg != "--shutdown-timeout" &&
+            arg != "--log-level" && arg != "--data-dir" && arg != "--sync" && arg != "--recovery") {
             return usage_error("unknown option '" + std::string{arg} + "'");
         }
         if (i + 1 >= args.size()) {
@@ -89,6 +90,33 @@ CliParseResult parse_command_line(std::span<const std::string_view> args) {
             if (!parse_unsigned<std::size_t>(value, 1, kMaxConnectionsLimit, config.max_connections)) {
                 return usage_error("invalid connection limit '" + std::string{value} + "' (expected 1-" +
                                    std::to_string(kMaxConnectionsLimit) + ")");
+            }
+        } else if (arg == "--max-line-bytes") {
+            if (!parse_unsigned<std::size_t>(value, kMinLineBytes, kMaxLineBytes, config.max_line_bytes)) {
+                return usage_error("invalid line limit '" + std::string{value} + "' (expected " +
+                                   std::to_string(kMinLineBytes) + "-" + std::to_string(kMaxLineBytes) + ")");
+            }
+        } else if (arg == "--idle-timeout") {
+            if (!parse_unsigned<std::uint32_t>(value, 0, kMaxTimeoutSeconds, config.idle_timeout_seconds)) {
+                return usage_error("invalid idle timeout '" + std::string{value} + "' (expected 0-" +
+                                   std::to_string(kMaxTimeoutSeconds) + " seconds)");
+            }
+        } else if (arg == "--shutdown-timeout") {
+            if (!parse_unsigned<std::uint32_t>(value, 0, kMaxTimeoutSeconds, config.shutdown_timeout_seconds)) {
+                return usage_error("invalid shutdown timeout '" + std::string{value} + "' (expected 0-" +
+                                   std::to_string(kMaxTimeoutSeconds) + " seconds)");
+            }
+        } else if (arg == "--log-level") {
+            if (value == "debug") {
+                config.log_level = LogLevel::debug;
+            } else if (value == "info") {
+                config.log_level = LogLevel::info;
+            } else if (value == "warn") {
+                config.log_level = LogLevel::warn;
+            } else if (value == "error") {
+                config.log_level = LogLevel::error;
+            } else {
+                return usage_error("invalid log level '" + std::string{value} + "' (expected debug, info, warn or error)");
             }
         } else if (arg == "--data-dir") {
             if (value.empty()) {

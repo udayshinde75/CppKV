@@ -156,10 +156,11 @@ S: OK\r\nOK\r\nINT 2\r\n
 
 | Limit | Value | Behaviour |
 |-------|-------|-----------|
-| Request line | 65 536 bytes | `ERR TOO_LARGE`, connection closed |
+| Request line | `--max-line-bytes`, default 65 536 bytes | `ERR TOO_LARGE`, connection closed |
 | Key | 512 bytes | `ERR INVALID_KEY` |
 | Connections | `--max-connections`, default 128 | `ERR BUSY`, connection closed |
-| Pending responses per connection | ~64 KiB per batch | The server produces at most about one batch of responses before writing it out, and does not read new requests while a write is blocked. A client that pipelines requests but never reads the responses therefore stalls only its own connection, instead of making the server buffer unbounded output |
+| Idle or stalled connection | `--idle-timeout`, default 300 s | A connection on which no read or write completes for this long is closed without a message (idle client, half a request, or a client that does not read its replies) |
+| Pending responses per connection | ~64 KiB per batch | The server produces at most about one batch of responses before writing it out, and does not read new requests while a write is blocked. A client that pipelines requests but never reads the responses therefore stalls only its own connection (until the idle timeout closes it), instead of making the server buffer unbounded output |
 
 ## 8. Durability
 
@@ -179,3 +180,16 @@ Every `SET` and every `DEL` of an existing key is appended to a log before it ta
 - **If the log cannot be written** (disk full, I/O error), mutations are answered with
   `ERR INTERNAL write not persisted (<reason>)` and the connection closes. Reads keep working. Writes stay
   disabled until the server is restarted.
+
+## 9. Connection teardown and server shutdown
+
+- When the server closes a connection after a reply (`BYE`, `ERR TOO_LARGE`, `ERR BUSY`, shutdown), it sends FIN
+  after that reply and briefly keeps reading (≤ 2 s, ≤ 64 KiB) before closing. A client that keeps sending still
+  receives the reply followed by a normal end of stream instead of a reset ([ADR 0004](adr/0004-operations.md)).
+- **On SIGINT/SIGTERM** the server stops accepting. Each connection receives replies to every request it had
+  already sent *in full* when the shutdown began, then the connection closes. A partially sent request is
+  discarded. Connections still busy after `--shutdown-timeout` (default 10 s) are closed without further replies.
+- A reply received before the close is as durable as §8 says. If a graceful shutdown completes within its
+  timeout, every request the server executed was also answered. A forced close (the timeout, or a second signal)
+  can cut off replies to requests that were already executed. As with any lost connection (§8), a missing reply
+  does not mean the request was not applied.

@@ -92,4 +92,42 @@ TEST(ParseCommandLine, RejectsOutOfRangeThreadsAndConnections) {
     EXPECT_EQ(parse({"--max-connections", "10000"}).config.max_connections, 10000U);
 }
 
+TEST(ParseCommandLine, ParsesOperationalOptions) {
+    const auto result = parse({"--max-line-bytes", "1024", "--idle-timeout", "0", "--shutdown-timeout", "3",
+                               "--log-level", "debug"});
+    ASSERT_EQ(result.action, cppkv::CliAction::run_server) << result.error;
+    EXPECT_EQ(result.config.max_line_bytes, 1024U);
+    EXPECT_EQ(result.config.idle_timeout_seconds, 0U);
+    EXPECT_EQ(result.config.shutdown_timeout_seconds, 3U);
+    EXPECT_EQ(result.config.log_level, cppkv::LogLevel::debug);
+}
+
+TEST(ParseCommandLine, OperationalDefaults) {
+    const auto result = parse({});
+    EXPECT_EQ(result.config.idle_timeout_seconds, 300U);
+    EXPECT_EQ(result.config.shutdown_timeout_seconds, 10U);
+    EXPECT_EQ(result.config.log_level, cppkv::LogLevel::info);
+}
+
+TEST(ParseCommandLine, RejectsInvalidOperationalOptions) {
+    EXPECT_EQ(parse({"--max-line-bytes", "15"}).action, cppkv::CliAction::usage_error);
+    EXPECT_EQ(parse({"--max-line-bytes", "8388609"}).action, cppkv::CliAction::usage_error);
+    EXPECT_EQ(parse({"--idle-timeout", "86401"}).action, cppkv::CliAction::usage_error);
+    EXPECT_EQ(parse({"--log-level", "verbose"}).error,
+              "invalid log level 'verbose' (expected debug, info, warn or error)");
+}
+
+TEST(ParseCommandLine, ParsesPersistenceOptions) {
+    const auto result = parse({"--data-dir", "/tmp/x", "--sync", "never", "--recovery", "truncate"});
+    ASSERT_EQ(result.action, cppkv::CliAction::run_server) << result.error;
+    EXPECT_EQ(result.config.persistence.data_dir, "/tmp/x");
+    EXPECT_EQ(result.config.persistence.sync, cppkv::SyncPolicy::never);
+    EXPECT_EQ(result.config.persistence.recovery, cppkv::RecoveryMode::truncate);
+    EXPECT_TRUE(result.config.persistence.enabled);
+    EXPECT_FALSE(parse({"--in-memory"}).config.persistence.enabled);
+    EXPECT_EQ(parse({"--sync", "sometimes"}).action, cppkv::CliAction::usage_error);
+    EXPECT_EQ(parse({"--recovery", "lenient"}).action, cppkv::CliAction::usage_error);
+    EXPECT_EQ(parse({"--data-dir", ""}).action, cppkv::CliAction::usage_error);
+}
+
 } // namespace

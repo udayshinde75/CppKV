@@ -17,21 +17,46 @@ SessionRegistry::AddResult SessionRegistry::try_add(const std::shared_ptr<Client
 }
 
 void SessionRegistry::remove(const ClientSession* session) {
-    const std::lock_guard lock{mutex_};
-    sessions_.erase(session);
+    std::function<void()> notify;
+    {
+        const std::lock_guard lock{mutex_};
+        sessions_.erase(session);
+        if (closed_ && sessions_.empty()) {
+            notify = std::move(on_drained_);
+            on_drained_ = nullptr;
+        }
+    }
+    // Called outside the lock: the callback may take other locks or post work,
+    // and must never be able to deadlock against a concurrent remove().
+    if (notify) {
+        notify();
+    }
 }
 
-std::vector<std::shared_ptr<ClientSession>> SessionRegistry::close_and_collect() {
-    const std::lock_guard lock{mutex_};
-    // Setting closed_ and collecting under one lock means a session is either
-    // collected here or rejected by try_add() — never neither.
-    closed_ = true;
+std::vector<std::shared_ptr<ClientSession>> SessionRegistry::close_and_collect(std::function<void()> on_drained) {
     std::vector<std::shared_ptr<ClientSession>> alive;
-    alive.reserve(sessions_.size());
-    for (const auto& [address, weak] : sessions_) {
-        if (std::shared_ptr<ClientSession> session = weak.lock()) {
-            alive.push_back(std::move(session));
+    std::function<void()> notify;
+    {
+        const std::lock_guard lock{mutex_};
+        // Setting closed_ and collecting under one lock means a session is either
+        // collected here or rejected by try_add() — never neither.
+        closed_ = true;
+        alive.reserve(sessions_.size());
+        for (const auto& [address, weak] : sessions_) {
+            if (std::shared_ptr<ClientSession> session = weak.lock()) {
+                alive.push_back(std::move(session));
+            }
         }
+        if (on_drained) {
+            if (sessions_.empty()) {
+                notify = std::move(on_drained);
+            } else {
+                on_drained_ = std::move(on_drained);
+            }
+        }
+    }
+    if (notify) {
+        notify();
     }
     return alive;
 }

@@ -57,6 +57,7 @@ ConnectionHandler::Progress ConnectionHandler::process(std::string& out, std::si
                                 : Response::failure(std::get<ProtocolError>(std::move(parsed)));
 
         encode_response(response, out);
+        ++requests_handled_;
         if (response.closes_connection()) {
             close_reason_ = response.kind == Response::Kind::bye ? "client quit" : "error closes connection";
             return Progress::close;
