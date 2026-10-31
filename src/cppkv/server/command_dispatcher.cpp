@@ -14,6 +14,10 @@ Response boolean(bool value) {
     return Response::integer_value(value ? 1U : 0U);
 }
 
+Response not_persisted(const AppendLog& log) {
+    return Response::failure(ErrorCode::internal, "write not persisted (" + log.failure_reason() + ")");
+}
+
 } // namespace
 
 Response CommandDispatcher::execute(Request request) {
@@ -31,12 +35,22 @@ Response CommandDispatcher::execute(Request request) {
     // rewritten: a data race, i.e. undefined behaviour — lost keys or a crash.
     // ThreadSanitizer reports exactly this if the lock is removed.
     //
-    // The lock is held only for the in-memory operation: parsing happened
-    // before, and encoding and socket I/O happen after, without the lock.
+    // The lock covers the log append and the in-memory operation. Parsing
+    // happened before, and encoding and socket I/O happen after, without it.
+    // Cost: with --sync always, the fsync runs under the lock, so every other
+    // command waits for it — durability is paid for in latency of all clients.
+    // Batching several clients' records into one fsync ("group commit") would
+    // reduce that; it is a Phase 8 candidate, to be justified by measurements.
     const std::lock_guard lock{mutex_};
 
     switch (request.command) {
     case CommandType::set:
+        // Log first: if the server crashes after this line, recovery replays
+        // the SET even though the client never got OK — harmless. The opposite
+        // order could send OK for a change that is lost in a crash.
+        if (log_ != nullptr && !log_->append_set(request.key, request.value)) {
+            return not_persisted(*log_);
+        }
         store_.set(std::move(request.key), std::move(request.value));
         return Response::ok();
     case CommandType::get: {
@@ -46,6 +60,12 @@ Response CommandDispatcher::execute(Request request) {
         return value ? Response::value(std::move(*value)) : Response::nil();
     }
     case CommandType::del:
+        if (!store_.contains(request.key)) {
+            return boolean(false);   // nothing changes, so nothing is logged
+        }
+        if (log_ != nullptr && !log_->append_del(request.key)) {
+            return not_persisted(*log_);
+        }
         return boolean(store_.erase(request.key));
     case CommandType::exists:
         return boolean(store_.contains(request.key));

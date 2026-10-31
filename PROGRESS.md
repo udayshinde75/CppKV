@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 5 — Concurrent clients: complete on Linux; awaiting macOS run and approval.**
+**Phase 6 — Persistence and recovery: complete on Linux; awaiting macOS run and approval.**
 
 ## Completed
 
@@ -81,6 +81,27 @@
   reuse, stop with connected clients); Phase 3 queued-client test replaced.
 - Data-race demonstration: removing the store lock → TSan reports 90 races in `std::_Hashtable` (unit) and fails
   the 16-client integration test; restored → clean.
+- Verified on macOS (debug, asan-ubsan, tsan with Clang TSan: 146/146; ci builds).
+
+### Phase 6 — Persistence and recovery (2026-10-30)
+
+- ADR 0003: append-only log `<data-dir>/cppkv.log`; length + CRC-32 framed little-endian records; write path
+  "log → sync per policy → apply to memory → reply" under the dispatcher mutex; durability table per policy;
+  torn-tail vs corruption classification; fail-stop; flock.
+- `persistence/log_format` (pure codec), `persistence/posix_file` (RAII fd, write_all, pread, `fdatasync` /
+  `F_FULLFSYNC`, directory fsync, ftruncate), `persistence/append_log` (open + replay + repair, append with
+  rollback, interval sync thread, sync counter).
+- `CommandDispatcher` logs before applying; DEL of a missing key is not logged; failed log → `ERR INTERNAL write
+  not persisted (...)`, reads continue.
+- CLI: `--data-dir`, `--sync always|interval|never`, `--recovery strict|truncate`, `--in-memory`; `main` recovers
+  before listening and exits 1 on corruption or a locked log.
+- Tests: log format 9 (golden bytes from Python zlib), append log 18 (every cut point, zero tail, damaged last
+  record, mid-file corruption strict/truncate, absurd length, foreign file, version, partial header, flock,
+  sync counts, RLIMIT_FSIZE write failure), integration 7 (restart, 800 concurrent writes, real SIGKILL with
+  sync always and never, torn tail, corrupted log exit status 1 + truncate override, second server refused).
+- Mutation checks (each caught): apply-before-log, DEL not logged, no partial-record rollback, strict mode
+  truncating, zero-tail rule removed, no fail-stop, no sync in `always`.
+- `strace`: `--sync always` → exactly one `fdatasync` per SET; `interval`/`never` → none during a 20-SET burst.
 
 ## Environment
 
@@ -108,6 +129,9 @@
 - Framer returns `string_view` (valid until next `feed`) to avoid a copy per line; the parser copies what it keeps.
 - Concurrency (ADR 0002): async on a fixed thread pool; strand per session; one store mutex held only for the
   in-memory operation; thread count independent of client count; hard connection cap.
+- Persistence (ADR 0003): log-before-apply under the same lock as the memory update; default `--sync always`;
+  strict recovery by default (damage followed by data refuses startup); fail-stop after any write/sync failure
+  (no fsync retries); one server per data directory via flock.
 - GCC `-Wtsan` fence warning: accepted, not worked around (`BOOST_ASIO_DISABLE_FENCED_BLOCK` would change what is
   tested); no TSan reports observed; Clang TSan on macOS cross-checks.
 
@@ -132,7 +156,9 @@ ctest --preset debug -L integration          # TCP tests only
 | 2026-10-30 | Linux | Same 12 configurations | Phase 4: 134/134 in every configuration; 0 warnings from CppKV code. Integration suite (34 tests) repeated 100× under ASan+UBSan, TSan and Clang release: 0 failures, 0 sanitizer reports |
 | 2026-10-30 | macOS | Phase 4: debug, asan-ubsan, tsan, ci | 134/134 each, no sanitizer reports |
 | 2026-10-30 | Linux | Same 12 configurations | Phase 5: 146/146 in every configuration (incl. GCC TSan ×2); 0 warnings from CppKV code. Integration suite repeated 30× under TSan, 50× under ASan+UBSan, 200× Clang release: 0 failures, 0 sanitizer reports |
-| — | macOS | Phase 5 | **not yet run** |
+| 2026-10-30 | macOS | Phase 5: debug, asan-ubsan, tsan (Clang), ci | 146/146 each, no sanitizer reports |
+| 2026-10-30 | Linux | Same 12 configurations | Phase 6: 180/180 in every configuration (incl. GCC TSan ×2, ASan+UBSan ×2); 0 warnings from CppKV code. Persistence + crash tests repeated 30× (GCC, Clang): 0 failures |
+| — | macOS | Phase 6 | **not yet run** |
 
 ## Known issues
 
@@ -145,10 +171,15 @@ ctest --preset debug -L integration          # TCP tests only
 - Remaining server limitations (ADR 0002): no idle timeout (an idle client holds a slot); `stop()` is abrupt
   (no draining); closing with unread input sends RST and may lose the final reply (also for `ERR BUSY`);
   persistent `accept()` errors would spin; one store mutex serialises all commands (Phase 8 measures).
+- Persistence limitations (ADR 0003): no compaction (log and restart time grow without bound); under
+  `--sync always` every fsync blocks all commands (no group commit yet); power-loss durability is not testable
+  here; `interval` is fixed at 1 s (not a CLI flag).
+- `cppkv-server` dies from SIGPIPE if its stderr is a closed pipe (e.g. `cppkv-server 2>&1 | head -1`): Asio
+  suppresses SIGPIPE only for sockets. To be handled with the other signals in Phase 7.
 - Ctrl-C terminates the process immediately (exit 130); graceful shutdown is Phase 7.
 
 ## Next phase
 
-**Phase 6 — Persistence and recovery:** append-only log with length + CRC-framed records written under the
-dispatcher lock before memory is updated; replay on startup; torn-tail and corruption handling; durability
-guarantees per sync policy (`always` with `F_FULLFSYNC` on macOS, `interval`, `never`), documented and tested.
+**Phase 7 — Reliability and operational behaviour:** graceful shutdown on SIGINT/SIGTERM (stop accepting, drain
+in-flight responses, close sessions, sync and close the log), SIGPIPE handling, idle timeout, lingering close,
+accept-error backoff, `--log-level`, configurable line limit; tests for error paths and resource cleanup.

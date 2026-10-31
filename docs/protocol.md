@@ -107,7 +107,7 @@ Clients should read `VALUE` responses by length: read `VALUE`, the length, one s
 | `PROTOCOL` | Empty token, or CR inside the line | stays open |
 | `TOO_LARGE` | Line longer than 65 536 bytes | **closed** — the rest of the line may still be arriving, so the next request's start cannot be found reliably |
 | `BUSY` | Connection limit reached: `ERR BUSY too many connections`, sent instead of serving the client | closed |
-| `INTERNAL` | Unexpected server failure (e.g. out of memory) | closed |
+| `INTERNAL` | Unexpected server failure (e.g. out of memory), or the log can no longer be written (`write not persisted`, §8) | closed |
 
 A line is checked in this order, and the first failing check decides the error:
 CR in line → empty command name → unknown command → empty tokens → argument count → key validity.
@@ -163,5 +163,19 @@ S: OK\r\nOK\r\nINT 2\r\n
 
 ## 8. Durability
 
-None yet. All data is in memory and is lost when the server stops. `OK` means "stored in memory".
-Persistence arrives in Phase 6, with its guarantees documented there.
+Every `SET` and every `DEL` of an existing key is appended to a log before it takes effect
+([ADR 0003](adr/0003-persistence.md)). What a successful reply guarantees depends on `--sync`:
+
+| `--sync` | After `OK` / `INT 1`, the change survives… |
+|----------|---------------------------------------------|
+| `always` (default) | a crash of the server process **and** an OS crash or power loss (if the device honours flushes) |
+| `interval` | a crash of the server process; an OS crash or power loss may lose about the last second |
+| `never` | a crash of the server process; an OS crash or power loss may lose any amount |
+| `--in-memory` | nothing: data is lost when the server stops |
+
+- **A reply means "applied and durable per policy".** The absence of a reply (connection lost) does **not**
+  mean "not applied". The server may have logged the change just before failing. `SET` is idempotent, so
+  retrying is safe.
+- **If the log cannot be written** (disk full, I/O error), mutations are answered with
+  `ERR INTERNAL write not persisted (<reason>)` and the connection closes. Reads keep working. Writes stay
+  disabled until the server is restarted.

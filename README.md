@@ -11,9 +11,11 @@ protocol or feature compatibility.
 
 ## Status
 
-**Phase 5 — concurrent clients.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads
-and supports `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles
-fragmented and pipelined input. Connections are capped; data lives in memory only.
+**Phase 6 — persistence.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads and
+supports `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles
+fragmented and pipelined input. Every change is written to a checksummed append-only log before it is acknowledged,
+so data survives restarts and crashes, with the guarantee per sync policy documented in
+[ADR 0003](docs/adr/0003-persistence.md).
 See [`PROGRESS.md`](PROGRESS.md) for current status and [`docs/architecture.md`](docs/architecture.md) for the design.
 
 ## Planned feature set (v1.0)
@@ -37,7 +39,7 @@ Targets: macOS on Apple Silicon (development) and Linux (validation).
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — requirements, components, protocol draft, phase plan, risks
-- [`docs/adr/`](docs/adr/) — architecture decision records
+- [`docs/adr/`](docs/adr/) — architecture decision records: server model, concurrency, persistence and durability
 - [`docs/protocol.md`](docs/protocol.md) — wire protocol specification: requests, responses, errors, limits
 
 ## Build
@@ -88,7 +90,14 @@ ctest --preset debug -L integration   # only the TCP tests (labels: unit, integr
 ./build/debug/src/cppkv-server --port 0         # any free port; the log line shows which
 ./build/debug/src/cppkv-server --bind ::1 --port 7380
 ./build/debug/src/cppkv-server --threads 8 --max-connections 500
+./build/debug/src/cppkv-server --data-dir /tmp/kv --sync interval
+./build/debug/src/cppkv-server --in-memory      # no persistence
 ```
+
+By default the log is `./data/cppkv.log`, relative to the directory you start the server in, and every write is
+`fsync`ed before `OK` (`--sync always`). Try it: `SET` something, stop the server (even with `kill -9`), start it
+again and `GET` it back. If the log is damaged anywhere except its last record, the server refuses to start and
+says where; `--recovery truncate` keeps the valid part instead.
 
 Stop it with Ctrl-C. In a second terminal, talk to it with `nc` (installed on macOS and most Linux systems):
 

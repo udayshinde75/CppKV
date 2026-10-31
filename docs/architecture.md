@@ -279,7 +279,12 @@ prevents (concurrent inserts during a rehash) was demonstrated with TSan by remo
 
 ---
 
-## 8. Persistence (Phase 6 — *draft*)
+## 8. Persistence (Phase 6 — **implemented, see [ADR 0003](adr/0003-persistence.md)**)
+
+ADR 0003 is the authoritative description, including the exact durability guarantees, the classification of torn
+tails versus corruption, and the fail-stop behaviour. The Phase 0 draft below was implemented as written, except
+that the open question is now decided: damage followed by further data refuses startup (`--recovery strict`,
+default), and `--recovery truncate` is the explicit override.
 
 Append-only log (`cppkv.log`) in a data directory.
 

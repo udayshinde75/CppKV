@@ -25,6 +25,7 @@ include(GoogleTest)
 # Unit tests: one executable, one source file per component under test.
 # ---------------------------------------------------------------------------
 add_executable(cppkv_unit_tests
+    unit/append_log_test.cpp
     unit/asio_smoke_test.cpp
     unit/build_info_test.cpp
     unit/command_dispatcher_test.cpp
@@ -32,6 +33,7 @@ add_executable(cppkv_unit_tests
     unit/connection_handler_test.cpp
     unit/kv_store_test.cpp
     unit/line_framer_test.cpp
+    unit/log_format_test.cpp
     unit/logger_test.cpp
     unit/request_parser_test.cpp
     unit/response_encoder_test.cpp
@@ -52,10 +54,16 @@ gtest_discover_tests(cppkv_unit_tests
 # a test failure, even when ctest is run without a preset.
 # ---------------------------------------------------------------------------
 add_executable(cppkv_integration_tests
+    integration/persistence_test.cpp
     integration/server_test.cpp
 )
 target_link_libraries(cppkv_integration_tests PRIVATE cppkv_core GTest::gtest_main)
 cppkv_set_warnings(cppkv_integration_tests)
+
+# The crash tests launch the real server binary and kill it with SIGKILL.
+add_dependencies(cppkv_integration_tests cppkv-server)
+target_compile_definitions(cppkv_integration_tests PRIVATE
+    CPPKV_SERVER_BINARY="$<TARGET_FILE:cppkv-server>")
 
 gtest_discover_tests(cppkv_integration_tests
     DISCOVERY_MODE PRE_TEST
