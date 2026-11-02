@@ -1,0 +1,14 @@
+date_utc: 2026-10-31T21:00:47Z
+git: unknown
+uname: Linux vm 6.18.44-fc-v185 #1 SMP PREEMPT_DYNAMIC @0 x86_64 x86_64 x86_64 GNU/Linux
+cpu: Intel(R) Xeon(R) Processor @ 2.10GHz
+logical_cpus: 2
+memory: MemTotal:        8220248 kB
+data_fs: /dev/vda       ext4  252G   15G   28G  35% /
+open_file_limit: 20000
+load_average_before: 1.43, 1.35, 1.11
+server: cppkv-server 0.1.0 (Boost 1.90.0, Asio 1.38.0, C++202002)
+CMAKE_BUILD_TYPE:STRING=Release
+CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++
+CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG -g
+duration_s: 5  warmup_s: 1  keys: 10000

@@ -1,0 +1,94 @@
+2026-10-31T21:39:23+01:00
+Running ./bench/cppkv_micro_bench
+Run on (2 X 2100 MHz CPU s)
+CPU Caches:
+  L1 Data 48 KiB (x2)
+  L1 Instruction 32 KiB (x2)
+  L2 Unified 2048 KiB (x2)
+  L3 Unified 266240 KiB (x1)
+Load Average: 1.73, 1.01, 0.42
+-------------------------------------------------------------------------------------------------------------------
+Benchmark                                                         Time             CPU   Iterations UserCounters...
+-------------------------------------------------------------------------------------------------------------------
+BM_Crc32/bytes:64_mean                                          123 ns          123 ns            3 bytes_per_second=497.999Mi/s
+BM_Crc32/bytes:64_median                                        118 ns          118 ns            3 bytes_per_second=518.711Mi/s
+BM_Crc32/bytes:1024_mean                                       2869 ns         2868 ns            3 bytes_per_second=340.571Mi/s
+BM_Crc32/bytes:1024_median                                     2860 ns         2860 ns            3 bytes_per_second=341.499Mi/s
+BM_Crc32/bytes:65536_mean                                    175328 ns       174999 ns            3 bytes_per_second=357.779Mi/s
+BM_Crc32/bytes:65536_median                                  173300 ns       172438 ns            3 bytes_per_second=362.449Mi/s
+BM_EncodeSetRecord/value_bytes:16_mean                          142 ns          142 ns            3 items_per_second=7.05437M/s
+BM_EncodeSetRecord/value_bytes:16_median                        141 ns          141 ns            3 items_per_second=7.08294M/s
+BM_EncodeSetRecord/value_bytes:1024_mean                       2820 ns         2819 ns            3 items_per_second=354.833k/s
+BM_EncodeSetRecord/value_bytes:1024_median                     2817 ns         2816 ns            3 items_per_second=355.1k/s
+BM_AppendLogSet/sync:2/value_bytes:16/real_time_mean          0.568 us        0.562 us            3 items_per_second=1.76305M/s syncs=0 never
+BM_AppendLogSet/sync:2/value_bytes:16/real_time_median        0.578 us        0.573 us            3 items_per_second=1.72946M/s syncs=0 never
+BM_AppendLogSet/sync:2/value_bytes:1024/real_time_mean         3.94 us         3.91 us            3 items_per_second=254.116k/s syncs=0 never
+BM_AppendLogSet/sync:2/value_bytes:1024/real_time_median       3.89 us         3.85 us            3 items_per_second=256.968k/s syncs=0 never
+BM_AppendLogSet/sync:1/value_bytes:16/real_time_mean          0.581 us        0.574 us            3 items_per_second=1.73232M/s syncs=0 interval
+BM_AppendLogSet/sync:1/value_bytes:16/real_time_median        0.570 us        0.552 us            3 items_per_second=1.75523M/s syncs=0 interval
+BM_AppendLogSet/sync:0/value_bytes:16/real_time_mean            166 us         40.5 us            3 items_per_second=6.06898k/s syncs=3.686k always
+BM_AppendLogSet/sync:0/value_bytes:16/real_time_median          161 us         40.7 us            3 items_per_second=6.20611k/s syncs=3.686k always
+BM_AppendLogSet/sync:0/value_bytes:1024/real_time_mean          233 us         55.2 us            3 items_per_second=4.29543k/s syncs=3.941k always
+BM_AppendLogSet/sync:0/value_bytes:1024/real_time_median        235 us         53.8 us            3 items_per_second=4.25902k/s syncs=3.941k always
+BM_ParseGet_mean                                               34.3 ns         34.1 ns            3 items_per_second=29.3779M/s
+BM_ParseGet_median                                             34.1 ns         33.5 ns            3 items_per_second=29.8678M/s
+BM_ParseSet/value_bytes:16_mean                                49.6 ns         49.3 ns            3 bytes_per_second=677.372Mi/s items_per_second=20.2936M/s
+BM_ParseSet/value_bytes:16_median                              49.2 ns         48.9 ns            3 bytes_per_second=682.009Mi/s items_per_second=20.4325M/s
+BM_ParseSet/value_bytes:1024_mean                              66.2 ns         66.0 ns            3 bytes_per_second=14.8024Gi/s items_per_second=15.2387M/s
+BM_ParseSet/value_bytes:1024_median                            68.5 ns         68.5 ns            3 bytes_per_second=14.1894Gi/s items_per_second=14.6077M/s
+BM_ParseSet/value_bytes:16384_mean                              349 ns          347 ns            3 bytes_per_second=43.9956Gi/s items_per_second=2.87996M/s
+BM_ParseSet/value_bytes:16384_median                            348 ns          348 ns            3 bytes_per_second=43.8792Gi/s items_per_second=2.87234M/s
+BM_FramePipelinedGets_mean                                     9077 ns         9053 ns            3 bytes_per_second=1.95627Gi/s items_per_second=110.554M/s
+BM_FramePipelinedGets_median                                   9204 ns         9200 ns            3 bytes_per_second=1.92347Gi/s items_per_second=108.701M/s
+BM_EncodeOk_mean                                               5.35 ns         5.31 ns            3 items_per_second=199.416M/s
+BM_EncodeOk_median                                             5.58 ns         5.46 ns            3 items_per_second=183.029M/s
+BM_EncodeValue/value_bytes:16_mean                             21.9 ns         21.7 ns            3 bytes_per_second=710.764Mi/s items_per_second=46.5806M/s
+BM_EncodeValue/value_bytes:16_median                           23.1 ns         23.0 ns            3 bytes_per_second=663.877Mi/s items_per_second=43.5079M/s
+BM_EncodeValue/value_bytes:1024_mean                           36.0 ns         35.9 ns            3 bytes_per_second=26.7312Gi/s items_per_second=28.0297M/s
+BM_EncodeValue/value_bytes:1024_median                         38.0 ns         38.0 ns            3 bytes_per_second=25.0963Gi/s items_per_second=26.3153M/s
+BM_EncodeValue/value_bytes:16384_mean                           197 ns          196 ns            3 bytes_per_second=80.503Gi/s items_per_second=5.27585M/s
+BM_EncodeValue/value_bytes:16384_median                         199 ns          198 ns            3 bytes_per_second=76.9361Gi/s items_per_second=5.04208M/s
+BM_HandlerPipelineInMemory_mean                               13805 ns        13760 ns            3 items_per_second=7.26902M/s
+BM_HandlerPipelineInMemory_median                             13766 ns        13740 ns            3 items_per_second=7.27824M/s
+BM_HandlerPipelineLogNoSync_mean                              19126 ns        18980 ns            3 items_per_second=5.30888M/s
+BM_HandlerPipelineLogNoSync_median                            19193 ns        18907 ns            3 items_per_second=5.28911M/s
+BM_DispatcherContended/real_time/threads:1_mean                 173 ns          172 ns            3 items_per_second=5.78737M/s
+BM_DispatcherContended/real_time/threads:1_median               172 ns          172 ns            3 items_per_second=5.80992M/s
+BM_DispatcherContended/real_time/threads:2_mean                1835 ns         1204 ns            3 items_per_second=1.09153M/s
+BM_DispatcherContended/real_time/threads:2_median              1860 ns         1223 ns            3 items_per_second=1.07546M/s
+BM_DispatcherContended/real_time/threads:4_mean                1278 ns          472 ns            3 items_per_second=3.17215M/s
+BM_DispatcherContended/real_time/threads:4_median              1305 ns          411 ns            3 items_per_second=3.06614M/s
+BM_DispatcherContended/real_time/threads:8_mean                2143 ns          476 ns            3 items_per_second=3.74291M/s
+BM_DispatcherContended/real_time/threads:8_median              2216 ns          488 ns            3 items_per_second=3.61064M/s
+BM_StoreContains/keys:1000/value_bytes:16_mean                 29.7 ns         29.6 ns            3 items_per_second=34.0492M/s
+BM_StoreContains/keys:1000/value_bytes:16_median               29.2 ns         29.2 ns            3 items_per_second=34.2738M/s
+BM_StoreContains/keys:1000000/value_bytes:16_mean               366 ns          362 ns            3 items_per_second=2.76772M/s
+BM_StoreContains/keys:1000000/value_bytes:16_median             370 ns          369 ns            3 items_per_second=2.71031M/s
+BM_StoreContains/keys:1000/value_bytes:1024_mean               31.3 ns         30.9 ns            3 items_per_second=32.3571M/s
+BM_StoreContains/keys:1000/value_bytes:1024_median             30.6 ns         30.6 ns            3 items_per_second=32.7297M/s
+BM_StoreContains/keys:1000/value_bytes:65536_mean              28.9 ns         28.8 ns            3 items_per_second=35.0956M/s
+BM_StoreContains/keys:1000/value_bytes:65536_median            27.3 ns         27.2 ns            3 items_per_second=36.7481M/s
+BM_StoreGetHit/keys:1000/value_bytes:16_mean                   51.9 ns         51.8 ns            3 bytes_per_second=295.107Mi/s items_per_second=19.3401M/s
+BM_StoreGetHit/keys:1000/value_bytes:16_median                 50.6 ns         50.6 ns            3 bytes_per_second=301.845Mi/s items_per_second=19.7817M/s
+BM_StoreGetHit/keys:1000000/value_bytes:16_mean                 812 ns          812 ns            3 bytes_per_second=18.8783Mi/s items_per_second=1.23721M/s
+BM_StoreGetHit/keys:1000000/value_bytes:16_median               782 ns          782 ns            3 bytes_per_second=19.5147Mi/s items_per_second=1.27891M/s
+BM_StoreGetHit/keys:1000/value_bytes:1024_mean                 86.4 ns         86.1 ns            3 bytes_per_second=11.1984Gi/s items_per_second=11.7423M/s
+BM_StoreGetHit/keys:1000/value_bytes:1024_median               83.8 ns         83.7 ns            3 bytes_per_second=11.3897Gi/s items_per_second=11.9429M/s
+BM_StoreGetHit/keys:1000/value_bytes:65536_mean                7778 ns         7776 ns            3 bytes_per_second=7.859Gi/s items_per_second=128.762k/s
+BM_StoreGetHit/keys:1000/value_bytes:65536_median              7888 ns         7885 ns            3 bytes_per_second=7.74079Gi/s items_per_second=126.825k/s
+BM_StoreGetMiss/keys:1000_mean                                 43.4 ns         43.3 ns            3 items_per_second=23.1134M/s
+BM_StoreGetMiss/keys:1000_median                               42.8 ns         42.6 ns            3 items_per_second=23.4802M/s
+BM_StoreGetMiss/keys:1000000_mean                              51.5 ns         51.2 ns            3 items_per_second=19.5641M/s
+BM_StoreGetMiss/keys:1000000_median                            50.9 ns         50.8 ns            3 items_per_second=19.6657M/s
+BM_StoreSetOverwrite/keys:1000/value_bytes:16_mean             67.7 ns         67.2 ns            3 items_per_second=14.9161M/s
+BM_StoreSetOverwrite/keys:1000/value_bytes:16_median           69.5 ns         68.6 ns            3 items_per_second=14.5687M/s
+BM_StoreSetOverwrite/keys:1000000/value_bytes:16_mean          1011 ns         1010 ns            3 items_per_second=995.113k/s
+BM_StoreSetOverwrite/keys:1000000/value_bytes:16_median        1044 ns         1043 ns            3 items_per_second=958.748k/s
+BM_StoreSetOverwrite/keys:1000/value_bytes:1024_mean            136 ns          136 ns            3 items_per_second=7.39649M/s
+BM_StoreSetOverwrite/keys:1000/value_bytes:1024_median          141 ns          141 ns            3 items_per_second=7.10598M/s
+BM_StoreSetOverwrite/keys:1000/value_bytes:65536_mean         10463 ns        10444 ns            3 items_per_second=95.7919k/s
+BM_StoreSetOverwrite/keys:1000/value_bytes:65536_median       10408 ns        10400 ns            3 items_per_second=96.1576k/s
+BM_StoreInsertFresh/keys:1000_mean                            0.177 ms        0.176 ms            3 items_per_second=5.78187M/s
+BM_StoreInsertFresh/keys:1000_median                          0.161 ms        0.161 ms            3 items_per_second=6.21783M/s
+BM_StoreInsertFresh/keys:100000_mean                           50.9 ms         50.6 ms            3 items_per_second=1.98842M/s
+BM_StoreInsertFresh/keys:100000_median                         52.4 ms         52.1 ms            3 items_per_second=1.91767M/s

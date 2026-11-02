@@ -91,7 +91,8 @@ private:
     void write_output(ConnectionHandler::Progress after_write);
     void continue_after_output(ConnectionHandler::Progress progress);
     void read_more();
-    void arm_timeout();
+    void note_io_started();
+    void wait_for_io_deadline(std::chrono::steady_clock::time_point deadline);
     void finish(std::string_view reason, LogLevel level, Close how);
     void linger_read();
     void close_socket();
@@ -111,6 +112,10 @@ private:
     std::string output_;
 
     Io io_ = Io::none;           // the one operation in flight
+    // When the operation in flight started. The I/O timeout fires when it has
+    // been pending for io_timeout, i.e. at io_started_ + io_timeout.
+    std::chrono::steady_clock::time_point io_started_{};
+    bool deadline_armed_ = false;   // a wait on timer_ for the I/O deadline is pending
     bool finished_ = false;      // finish() ran; only lingering may continue
     bool draining_ = false;      // graceful shutdown requested
     std::size_t lingered_bytes_ = 0;

@@ -375,8 +375,8 @@ CppKV/
 │   ├── unit/                 store, framer, parser, encoder, dispatcher, log
 │   └── integration/          real TCP: server on an ephemeral port, client in-process
 ├── bench/                    Google Benchmark micro-benchmarks (Phase 8)
-├── tools/                    cppkv-cli test client and load generator
-├── scripts/                  demo and benchmark helpers
+├── tools/loadgen/            cppkv-loadgen: closed/open-loop load generator (Phase 8)
+├── scripts/                  bench_load.sh: load-test matrix (Phase 8); demo helpers later
 ├── docs/
 │   ├── architecture.md
 │   ├── protocol.md           (Phase 4)
@@ -398,7 +398,7 @@ It may be split later only if build times or dependency direction make that wort
 |------------|--------------------|-----|
 | Boost 1.83–1.90 — Asio, later CRC | `find_package(Boost 1.83 CONFIG REQUIRED)`; macOS: Homebrew (1.90.0 installed); Linux/CI: `apt install libboost-dev` (Ubuntu 24.04 ships 1.83) | Asio is header-only; only `Boost::headers` is linked. |
 | GoogleTest | CMake `FetchContent`, pinned to `v1.17.0` (needs CMake ≥ 3.16; checked) | Reproducible, no system package version drift; not installed via Homebrew on the Mac. |
-| Google Benchmark | `FetchContent`, pinned tag (latest upstream: `v1.10.0`) (Phase 8) | Same reason. |
+| Google Benchmark | `FetchContent` from Git, pinned by commit hash of `v1.10.0` (Phase 8) | Same reason. No release tarball exists, and GitHub's generated archives are not guaranteed byte-stable, so a commit hash replaces the SHA-256. |
 
 CMake minimum: **3.25** (Ubuntu 24.04 has 3.28; the Mac has 4.4). Written as
 `cmake_minimum_required(VERSION 3.25...4.4)` so CMake 4 applies its newer policies without warnings.

@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 7 — Reliability and operational behaviour: complete on Linux; awaiting macOS run and approval.**
+**Phase 8 — Performance benchmarking: complete (Linux + macOS); awaiting commit and approval.**
 
 ## Completed
 
@@ -125,6 +125,30 @@
   requests, no I/O timeout, timeout via `cancel()`. Not observable on Linux: lingering vs FIN-first (measured and
   documented in ADR 0004).
 
+### Phase 8 — Performance benchmarking (2026-10-31)
+
+- `bench/`: Google Benchmark 1.10.0 (FetchContent, pinned by commit hash) — store, framer/parser/encoder, CRC-32,
+  record encoding, `AppendLog` per sync policy, whole sans-I/O request path, dispatcher mutex under 1–8 threads.
+  `bench.smoke` CTest runs every benchmark once (ci preset), so they cannot rot or crash unnoticed.
+- `tools/loadgen` (`cppkv-loadgen`): closed loop with pipelining, open loop at a fixed rate measured from the
+  scheduled send time (coordinated omission), separate client send-lag report, reply validation, log-linear
+  latency histogram (≤ 0.79 % error), text/CSV output. `scripts/bench_load.sh`: 34-run matrix (clients, sync
+  policy × read mix, I/O threads, pipelining, open-loop load levels, value size), fresh server per run,
+  environment record.
+- Server: logs open-file limit at startup, and `peak_rss_kib`, `cpu_user_ms`, `cpu_system_ms` at shutdown.
+- Found by measurement and fixed: **missing `TCP_NODELAY`** (Nagle held replies until the client's next request;
+  open-loop p95 0.89 → 0.14 ms at 4 × 1250 req/s); **I/O timer re-armed per operation** (2 `timerfd_settime` per
+  request; −30 % throughput with 1 client on 4 threads) → armed once, re-arms itself; 3 mutations caught.
+- Observations recorded with evidence in `docs/benchmarks.md`: work is ~75–85 % kernel time at depth 1 (pipelining
+  ×15); `--sync always` serialises SETs at ~1/fsync and stalls reads behind the lock; CRC-32 = 67.6 % of user
+  instructions for 16 KiB SETs (callgrind), inside the lock; thread hand-offs (~14 futex/request); GET copy and
+  the single mutex are not bottlenecks. M2 run: `F_FULLFSYNC` 2.7 ms → 511 SET/s with `--sync always`; the log's
+  `write(2)` costs 2.5 µs on APFS (SET-only `--sync never` −63 % vs in memory); `--threads 1` is the most efficient
+  even on 8 cores (8 threads: 3.3× CPU per request). Candidates listed, not implemented: group commit (largest
+  effect), record encoding outside the lock, faster CRC-32, io_context per thread.
+- Tests: `LatencyHistogram` 8, `LoadOptions` 5, `ProcessStats` 3, `LoadgenTest` 6 (counts match server state,
+  exact open-loop request count, misses, server stop and connection limit reported as failures).
+
 ## Environment
 
 - **Linux sandbox:** Ubuntu 24.04.5 x86_64; GCC 13.3.0, Clang 18.1.3; CMake 3.28.3 + 4.4.0; Boost 1.83.0 + 1.90.0.
@@ -139,7 +163,8 @@
   `VALUE <len> <bytes>`, `ERR <CODE> <message>`.
 - Modern Asio API only, enforced by `BOOST_ASIO_NO_DEPRECATED`; `-Wnull-dereference` Clang-only.
 - Store accepts any bytes; key/value rules are enforced by the parser (Phase 4).
-- `get` returns a copy (safe once concurrency arrives); performance impact to be measured in Phase 8, not assumed.
+- `get` returns a copy (safe once concurrency arrives); Phase 8 measured +21 ns (16 B) to +7.9 µs (64 KiB) per
+  GET against 10–40 µs of server CPU per request: kept.
 - Store method names follow the standard library (`erase`, `contains`); the dispatcher maps `DEL`/`EXISTS` to them.
 - Phase 3 server is synchronous and iterative (ADR 0001); concurrency model decided in Phase 5.
 - No process-wide SIGPIPE handler: Asio suppresses SIGPIPE per socket (verified in its sources, covered by a test).
@@ -157,6 +182,9 @@
 - Persistence (ADR 0003): log-before-apply under the same lock as the memory update; default `--sync always`;
   strict recovery by default (damage followed by data refuses startup); fail-stop after any write/sync failure
   (no fsync retries); one server per data directory via flock.
+- Benchmarks (Phase 8): numbers are compared only within one machine; every optimisation needs a before/after
+  measurement; `TCP_NODELAY` on; I/O timer armed once per stall window; store mutex kept (not a bottleneck);
+  further optimisations are candidates awaiting the M2 measurements and approval.
 - GCC `-Wtsan` fence warning: accepted, not worked around (`BOOST_ASIO_DISABLE_FENCED_BLOCK` would change what is
   tested); no TSan reports observed; Clang TSan on macOS cross-checks.
 
@@ -166,6 +194,8 @@
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 cmake --preset asan-ubsan && cmake --build --preset asan-ubsan && ctest --preset asan-ubsan
 ctest --preset debug -L integration          # TCP tests only
+cmake --preset bench && cmake --build --preset bench   # Release + micro-benchmarks + load generator
+./build/bench/bench/cppkv_micro_bench && scripts/bench_load.sh
 ./build/debug/src/cppkv-server --port 7379   # then: nc 127.0.0.1 7379, try SET/GET
 ```
 
@@ -186,7 +216,9 @@ ctest --preset debug -L integration          # TCP tests only
 | 2026-10-31 | macOS | Phase 6: debug, asan-ubsan, tsan, ci | 180/180 each, no sanitizer reports |
 | 2026-10-31 | Linux | Same 12 configurations | Phase 7: 199/199 in every configuration (the EMFILE test is skipped in the two ASan+UBSan builds, see Known issues); 0 warnings from CppKV code. Operations + process + persistence tests repeated 10× under TSan, 10× under ASan+UBSan, 20× Clang: 0 failures, 0 sanitizer reports |
 | 2026-10-31 | macOS | Phase 7 (1st run): debug, asan-ubsan, tsan | 198/199 in debug and tsan: `AcceptBacksOff…` failed because macOS drops a connection whose `accept()` hit EMFILE (Linux keeps it queued). Test made platform-aware; Linux re-run 199/199, changed test 20/20 |
-| — | macOS | Phase 7 (after fix) | **not yet run** |
+| 2026-10-31 | macOS | Phase 7 (after fix): debug, asan-ubsan, tsan, ci | 199/199 run, 0 failed, no sanitizer reports (wildcard-bind test skipped on macOS by design; EMFILE test also skipped in asan-ubsan) |
+| 2026-10-31 | Linux | Same 12 configurations + `bench` (GCC/CMake 4.4/Boost 1.90, Clang/CMake 3.28/Boost 1.83) + ASan+UBSan and TSan with benchmarks — 16 total | Phase 8: 221/221 (222 with `bench.smoke` where benchmarks are built) in every configuration after one test fix (below); 0 warnings from CppKV code. Loadgen + operations tests repeated 10× under TSan and 10× under ASan+UBSan: 0 failures, 0 sanitizer reports. Two full 34-run load matrices: 0 errors |
+| 2026-11-02 | macOS | Phase 8: debug, asan-ubsan, tsan, ci; then `bench` (micro + 34-run load matrix) | 221/221 (ci 222/222) run, 0 failed, no sanitizer reports (wildcard-bind skipped by design; EMFILE also skipped in asan-ubsan). Benchmarks: all 34 load runs 0 errors; results in docs/benchmarks.md §4M (one run, on battery, after the builds) |
 
 ## Known issues
 
@@ -196,7 +228,15 @@ ctest --preset debug -L integration          # TCP tests only
 - Strong exception guarantee of `KvStore::set` is argued from the standard, not tested: testing it would need
   allocation-failure injection (a custom allocator), which is not worth the complexity yet.
 - Unseeded string hash → hash-flooding risk if exposed to untrusted clients (documented in architecture §6).
-- One store mutex serialises all commands, including the fsync under `--sync always` (Phase 8 measures).
+- One store mutex serialises all commands, including the fsync under `--sync always` and the CRC of every logged
+  record: measured in Phase 8 (benchmarks O5, O6); group commit / encoding outside the lock are candidates.
+- Found by the Phase 8 matrix and fixed: `ProcessStats.PeakRssGrowsWhenMemoryIsTouched` failed in Clang release
+  builds because the optimiser removed the never-read 64 MiB test allocation; it now writes through a volatile
+  pointer.
+- Benchmarks: the Linux numbers come from a 2-vCPU cloud VM where client and server share the CPUs; the M2 numbers
+  are one run made on battery right after the test builds (to be repeated on mains power); open-loop p99 on the M2
+  (up to 37 ms at 90 % load) is unexplained. `TCP_NODELAY` has no automated regression test (delayed-ACK timing is OS-specific); it is
+  covered by the before/after measurement.
 - Persistence limitations (ADR 0003): no compaction (log and restart time grow without bound); under
   `--sync always` every fsync blocks all commands (no group commit yet); power-loss durability is not testable
   here; `interval` is fixed at 1 s (not a CLI flag).
@@ -208,11 +248,10 @@ ctest --preset debug -L integration          # TCP tests only
 - Operations limits (ADR 0004): a client that ignores FIN keeps its socket for ≤ 2 s after the server is done;
   more than 64 KiB of input after the final reply still ends in RST; timeouts have 1 s granularity; no
   connection-rate limiting.
-- Ctrl-C terminates the process immediately (exit 130); graceful shutdown is Phase 7.
 
 ## Next phase
 
-**Phase 8 — Performance benchmarking:** Google Benchmark micro-benchmarks for the store, parser and log codec; a
-repeatable closed- and open-loop load generator reporting throughput and p50/p95/p99 latency for several client
-counts and read/write mixes; `--sync always` vs `interval` vs `never`; recorded environment; at least one
-profile-driven observation before any optimisation.
+**Phase 9 — CI and quality:** GitHub Actions on Linux (GCC + Clang) and macOS (AppleClang) with `-Werror`, sanitizer
+jobs (ASan+UBSan, TSan, LSan on Linux), the benchmark smoke test; a clean build reproduced from the README; a
+final quality audit. Pushing to GitHub needs explicit permission. Optional before it, if approved: the Phase 8
+optimisation candidates (benchmarks §6), each with a before/after measurement.

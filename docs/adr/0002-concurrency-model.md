@@ -81,7 +81,14 @@ Still open after Phase 5 (all but the last were resolved in Phase 7, see [ADR 00
 - ~~`stop()` is abrupt~~ → `shutdown()` drains; `stop()` remains the immediate variant.
 - ~~Closing with unread input sends RST~~ → lingering close.
 - ~~Persistent `accept()` errors spin~~ → 100 ms back-off on resource exhaustion.
-- **The store lock serialises all commands.** That's fine at this scale; Phase 8 measures contention.
+- **The store lock serialises all commands.** Phase 8 measured it ([benchmarks](../benchmarks.md) O8): in the
+  server it is held for ~0.1–0.2 µs of 10+ µs per request and does not limit throughput, except when something slow
+  runs inside it — the fsync under `--sync always` (O5) and the CRC of large values (O6). The mutex stays.
+- **Thread hand-offs (Phase 8, O3).** With one `io_context` on N threads, a request's completions move between
+  threads (~14 `futex` calls per request with 4 threads and 1 client, none with 1 thread), so `--threads 4` serves
+  a single client no faster than `--threads 1` at ~2.2× the CPU per request. Confirmed on the 8-core M2: with 32
+  clients, 8 threads use 3.3× the CPU per request of 1 thread and serve no more. One `io_context` per thread is the
+  candidate fix; until then `--threads 1` is the efficient setting.
 
 ## Validation
 

@@ -159,6 +159,18 @@ void TcpServer::on_accept(const boost::system::error_code& ec, tcp::socket socke
     }
 
     ++accepted_;
+    // Disable Nagle's algorithm. With it, a reply that is ready while an
+    // earlier reply is still unacknowledged is held back until that ACK
+    // arrives, and clients delay ACKs until they next send: the reply then
+    // waits for the client's NEXT request. Measured in Phase 8 (open loop, 4
+    // clients at 5000 req/s): p95 latency was the schedule interval itself,
+    // ~0.9 ms; see docs/benchmarks.md. Each reply is one complete write, so
+    // nothing is gained by coalescing. Failure only costs latency: log it.
+    boost::system::error_code nodelay_ec;
+    socket.set_option(tcp::no_delay{true}, nodelay_ec);
+    if (nodelay_ec) {
+        logger_.debug("cannot set TCP_NODELAY: " + nodelay_ec.message());
+    }
     ClientSession::Options options;
     options.max_line_bytes = max_line_bytes_;
     options.io_timeout = idle_timeout_;

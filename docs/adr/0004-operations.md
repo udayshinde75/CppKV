@@ -61,8 +61,8 @@ connection slot is released before the FIN is sent, so lingering never blocks ne
 
 ### 3. I/O timeout (`--idle-timeout`, default 300 s, 0 = off)
 
-Every read and every write arms one per-session `steady_timer`. If no operation completes within the timeout, the
-connection is closed. This covers three cases with one mechanism:
+If one read or write stays pending for the whole timeout without completing, the connection is closed. This
+covers three cases with one mechanism:
 
 - an idle client;
 - a client that sends half a line and then nothing;
@@ -77,9 +77,25 @@ Two Asio details matter here:
   The next step can then block forever with no timer left to stop it. This was found during Phase 7: a mutation
   that made the drain cancel writes went undetected, because the cancel kept missing the write. On timeout, the
   session therefore closes the socket, after which every pending or later operation fails.
-- **Stale timer completions.** `expires_after()` cancels a pending wait, but a wait that has *already* expired may
-  already be queued and can no longer be cancelled. The handler ignores itself if `expiry()` is still in the
-  future, i.e. if the timer was re-armed meanwhile.
+- **Arm once, not per operation (changed in Phase 8).** Phase 7 re-armed a per-session `steady_timer` for every
+  read and every write. Phase 8 measured that this cost ~30 % of throughput with one client on four I/O threads:
+  two `timerfd_settime` calls per request, and re-arming from a thread other than the one blocked in
+  `epoll_wait`/`kqueue` wakes that thread ([benchmarks](../benchmarks.md#o2)). Now starting an operation only
+  records its start time. One wait stays pending; when it fires early (operations completed meanwhile) it re-arms
+  itself for the *current* operation's deadline, `start + timeout`. The close happens at the same moment as
+  before, and a stale completion needs no special check: the deadline is recomputed from the current operation.
+  Three mutations (never close, no re-arm after progress, ignore progress) are each caught by the Phase 7 tests.
+
+### 3a. `TCP_NODELAY` on every connection (added in Phase 8)
+
+The server disables Nagle's algorithm on accepted sockets. With Nagle, a reply that is ready while an earlier reply
+is still unacknowledged is held back until the ACK arrives; clients delay ACKs until they send again, so the
+reply waits for the client's *next* request. Phase 8's open-loop test showed the signature: p95 latency equal to
+the per-connection request interval (4 clients at 5000 req/s: 0.89 ms, at 2000 req/s: 2.1 ms). With `TCP_NODELAY`
+the same runs gave 0.14 ms and 0.39 ms ([benchmarks](../benchmarks.md#o1)). Every reply is written in one
+`async_write` per batch, so nothing is gained by letting the kernel coalesce. A failure to set the option is logged
+at debug level and only costs latency. Not covered by an automated test: delayed-ACK timing differs between
+operating systems, so a deterministic test is not practical; the measurement is the evidence.
 
 ### 4. Accept back-off on resource exhaustion
 

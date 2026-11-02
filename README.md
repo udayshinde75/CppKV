@@ -11,11 +11,13 @@ protocol or feature compatibility.
 
 ## Status
 
-**Phase 7 — reliability.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads and
+**Phase 8 — measured.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads and
 supports `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles
 fragmented and pipelined input. Every change is written to a checksummed append-only log before it is acknowledged
 ([ADR 0003](docs/adr/0003-persistence.md)). SIGINT/SIGTERM shut it down gracefully; idle and stalled connections
 time out; connection, request and output sizes are bounded ([ADR 0004](docs/adr/0004-operations.md)).
+Micro-benchmarks and a load generator measure it; the method, the machines and every result are in
+[`docs/benchmarks.md`](docs/benchmarks.md). Numbers there are specific to the machine they were measured on.
 
 ## Planned feature set (v1.0)
 
@@ -40,6 +42,7 @@ Targets: macOS on Apple Silicon (development) and Linux (validation).
 - [`docs/architecture.md`](docs/architecture.md) — requirements, components, protocol draft, phase plan, risks
 - [`docs/adr/`](docs/adr/) — architecture decision records: server model, concurrency, persistence and durability
 - [`docs/protocol.md`](docs/protocol.md) — wire protocol specification: requests, responses, errors, limits
+- [`docs/benchmarks.md`](docs/benchmarks.md) — how performance is measured, results, and what they led to
 
 ## Build
 
@@ -53,7 +56,8 @@ Targets: macOS on Apple Silicon (development) and Linux (validation).
 | Boost (headers only) | 1.83 | 1.83.0, 1.90.0 |
 
 GoogleTest 1.17.0 is downloaded automatically during configuration (pinned by SHA-256), so the first
-configure needs internet access.
+configure needs internet access. The `bench` and `ci` presets also fetch Google Benchmark 1.10.0 with Git
+(pinned by commit hash), so they need `git` as well.
 
 ```bash
 # macOS (Homebrew)
@@ -77,10 +81,11 @@ ctest --preset debug -L integration   # only the TCP tests (labels: unit, integr
 | Preset | Purpose |
 |--------|---------|
 | `debug` | Day-to-day development |
-| `release` | Optimised build (benchmarks later) |
+| `release` | Optimised build |
+| `bench` | Release optimisation + debug info, with the micro-benchmarks (for measuring and profiling) |
 | `asan-ubsan` | AddressSanitizer + UndefinedBehaviorSanitizer |
 | `tsan` | ThreadSanitizer (cannot be combined with ASan) |
-| `ci` | Debug with warnings treated as errors |
+| `ci` | Debug with warnings treated as errors; also compiles and smoke-runs the benchmarks |
 
 ## Run
 
@@ -140,6 +145,22 @@ printf 'SET a 1\r\nSET b 2\r\nDBSIZE\r\nQUIT\r\n' | nc 127.0.0.1 7379
 Open several `nc` sessions at once: they are served concurrently and see each other's writes. Once
 `--max-connections` clients are connected, the next one gets `ERR BUSY too many connections`.
 The design is explained in [ADR 0002](docs/adr/0002-concurrency-model.md).
+
+## Measure
+
+```bash
+cmake --preset bench && cmake --build --preset bench
+./build/bench/bench/cppkv_micro_bench                 # Google Benchmark: store, protocol, log, dispatcher
+scripts/bench_load.sh                                 # load-test matrix: fresh server per run, CSV + environment
+
+# Or drive a running server yourself:
+./build/bench/tools/loadgen/cppkv-loadgen --port 7379 --clients 16 --duration 10      # closed loop
+./build/bench/tools/loadgen/cppkv-loadgen --port 7379 --clients 16 --rate 20000       # open loop, fixed rate
+```
+
+`cppkv-loadgen` reports throughput and p50/p95/p99/p99.9 latency; in open-loop mode it measures from each
+request's *scheduled* send time, so client-side delays are not hidden. See
+[`docs/benchmarks.md`](docs/benchmarks.md) for the method and its limits.
 
 ## IDE notes
 

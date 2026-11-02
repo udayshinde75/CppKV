@@ -42,12 +42,23 @@
       }
     },
     {
+      "name": "bench",
+      "displayName": "Benchmarks: Release optimisation + debug info for profilers",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -g",
+        "CPPKV_BUILD_BENCHMARKS": "ON"
+      }
+    },
+    {
       "name": "ci",
-      "displayName": "CI: Debug, warnings as errors",
+      "displayName": "CI: Debug, warnings as errors (benchmarks compiled, smoke-run)",
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "CPPKV_WARNINGS_AS_ERRORS": "ON"
+        "CPPKV_WARNINGS_AS_ERRORS": "ON",
+        "CPPKV_BUILD_BENCHMARKS": "ON"
       }
     }
   ],
@@ -56,6 +67,7 @@
     { "name": "release",    "configurePreset": "release" },
     { "name": "asan-ubsan", "configurePreset": "asan-ubsan" },
     { "name": "tsan",       "configurePreset": "tsan" },
+    { "name": "bench",      "configurePreset": "bench" },
     { "name": "ci",         "configurePreset": "ci" }
   ],
   "testPresets": [
@@ -82,6 +94,7 @@
       "configurePreset": "tsan",
       "environment": { "TSAN_OPTIONS": "halt_on_error=1:second_deadlock_stack=1" }
     },
+    { "name": "bench",      "inherits": "base", "configurePreset": "bench" },
     { "name": "ci",         "inherits": "base", "configurePreset": "ci" }
   ]
 }

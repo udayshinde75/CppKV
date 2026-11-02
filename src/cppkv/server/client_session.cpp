@@ -100,7 +100,7 @@ void ClientSession::process(std::string_view new_bytes) {
 
 void ClientSession::write_output(ConnectionHandler::Progress after_write) {
     io_ = Io::writing;
-    arm_timeout();
+    note_io_started();
     // async_write keeps writing until every byte of output_ is sent (or an
     // error occurs). output_ must not change until the handler runs.
     asio::async_write(socket_, asio::buffer(output_),
@@ -145,7 +145,7 @@ void ClientSession::read_more() {
     }
 
     io_ = Io::reading;
-    arm_timeout();
+    note_io_started();
     // At most one read is pending at any time, so read_buffer_ is never shared.
     socket_.async_read_some(
         asio::buffer(read_buffer_), [self = shared_from_this()](const boost::system::error_code& ec, std::size_t n) {
@@ -175,19 +175,41 @@ void ClientSession::read_more() {
         });
 }
 
-void ClientSession::arm_timeout() {
+// I/O timeout: close the connection when one read or write has been pending
+// for options_.io_timeout without completing.
+//
+// The timer is NOT re-armed for every operation. Phase 8 measured that doing so
+// (two timer updates per request) cost ~30 % throughput with one client on four
+// I/O threads: re-arming a timer from a thread other than the one waiting in
+// epoll/kqueue wakes that thread up (docs/benchmarks.md). Instead, starting an
+// operation only records the time; one wait stays pending, and when it fires
+// early (an operation completed meanwhile) it re-arms itself for the current
+// operation's deadline. The connection still closes exactly io_timeout after
+// the stalled operation started.
+void ClientSession::note_io_started() {
     if (options_.io_timeout == std::chrono::steady_clock::duration::zero()) {
         return;
     }
-    // expires_after() cancels a previous wait; that handler then runs with
-    // operation_aborted. But a wait that had ALREADY expired may be queued and
-    // can no longer be cancelled — so the handler also checks expiry() against
-    // the clock: if the timer was re-armed meanwhile, the expiry lies in the
-    // future and the stale completion is ignored.
-    timer_.expires_after(options_.io_timeout);
+    io_started_ = std::chrono::steady_clock::now();
+    if (!deadline_armed_) {
+        wait_for_io_deadline(io_started_ + options_.io_timeout);
+    }
+}
+
+void ClientSession::wait_for_io_deadline(std::chrono::steady_clock::time_point deadline) {
+    deadline_armed_ = true;
+    timer_.expires_at(deadline);
     timer_.async_wait([self = shared_from_this()](const boost::system::error_code& ec) {
-        if (ec == asio::error::operation_aborted || self->finished_ || self->io_ == Io::none ||
-            self->timer_.expiry() > std::chrono::steady_clock::now()) {
+        self->deadline_armed_ = false;
+        if (ec == asio::error::operation_aborted || self->finished_ || self->io_ == Io::none) {
+            // Cancelled, or closed meanwhile (finish() reuses timer_ for the
+            // linger deadline), or between operations: the next operation
+            // re-arms it.
+            return;
+        }
+        const auto deadline_now = self->io_started_ + self->options_.io_timeout;
+        if (deadline_now > std::chrono::steady_clock::now()) {
+            self->wait_for_io_deadline(deadline_now);   // progress was made: wait for the current operation
             return;
         }
         // No progress for the whole timeout: close the connection.

@@ -7,6 +7,7 @@
 #include "cppkv/common/build_info.hpp"
 #include "cppkv/common/config.hpp"
 #include "cppkv/common/logger.hpp"
+#include "cppkv/common/process_stats.hpp"
 #include "cppkv/persistence/append_log.hpp"
 #include "cppkv/server/command_dispatcher.hpp"
 #include "cppkv/server/tcp_server.hpp"
@@ -96,6 +97,9 @@ int run(std::span<char* const> argv) {
     // store and logger it refers to are still alive while it shuts down.
     cppkv::Logger logger{std::cerr, parsed.config.log_level};
     cppkv::KvStore store;
+    // Each client needs one descriptor, so this limit caps --max-connections in
+    // practice (load tests record it, docs/benchmarks.md).
+    logger.info("open file limit: " + std::to_string(cppkv::open_file_limit()) + " (0 = unlimited)");
 
     // Recovery happens before the server accepts its first client, on this
     // thread only, so replaying into the store needs no locking.
@@ -143,7 +147,11 @@ int run(std::span<char* const> argv) {
         logger.error("exiting after log failure: " + log->failure_reason());
         return kExitFailure;
     }
-    logger.info("shutdown complete");
+    // Resource use over the whole run, for load tests (scripts/bench_load.sh).
+    const cppkv::CpuTimes cpu = cppkv::cpu_times();
+    logger.info("shutdown complete: peak_rss_kib=" + std::to_string(cppkv::peak_rss_bytes() / 1024) +
+                " cpu_user_ms=" + std::to_string(cpu.user.count() / 1000) +
+                " cpu_system_ms=" + std::to_string(cpu.system.count() / 1000));
     return kExitOk;
 }
 

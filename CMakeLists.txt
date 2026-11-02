@@ -16,6 +16,9 @@ project(CppKV
 # PROJECT_IS_TOP_LEVEL (CMake 3.21+) is false when CppKV is consumed via
 # add_subdirectory/FetchContent; tests are then off by default.
 option(CPPKV_BUILD_TESTS "Build the CppKV test suite" ${PROJECT_IS_TOP_LEVEL})
+# Google Benchmark is fetched only when micro-benchmarks are requested (presets
+# "bench" and "ci"), so ordinary builds need no extra download.
+option(CPPKV_BUILD_BENCHMARKS "Build the Google Benchmark micro-benchmarks" OFF)
 option(CPPKV_WARNINGS_AS_ERRORS "Treat compiler warnings as errors (used in CI)" OFF)
 set(CPPKV_SANITIZERS "" CACHE STRING
     "Semicolon-separated sanitizers: e.g. 'address;undefined' or 'thread'")
@@ -60,8 +63,14 @@ find_package(Threads REQUIRED)
 # Targets
 # ---------------------------------------------------------------------------
 add_subdirectory(src)
+add_subdirectory(tools)   # cppkv-loadgen: needs nothing beyond Boost, always built
 
-if(CPPKV_BUILD_TESTS)
+if(CPPKV_BUILD_TESTS OR CPPKV_BUILD_BENCHMARKS)
     enable_testing()
+endif()
+if(CPPKV_BUILD_TESTS)
     add_subdirectory(tests)
+endif()
+if(CPPKV_BUILD_BENCHMARKS)
+    add_subdirectory(bench)
 endif()

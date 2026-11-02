@@ -1,0 +1,18 @@
+date_utc: 2026-11-02T10:03:18Z
+git: 5bb6fa6-dirty
+uname: Darwin Udays-MacBook-Air.local 27.0.0 Darwin Kernel Version 27.0.0: Tue Aug 11 21:02:16 PDT 2026; root:xnu-13432.1.9~1/RELEASE_ARM64_T8112 arm64
+cpu: Apple M2
+logical_cpus: 8
+performance_cores: 4
+efficiency_cores: 4
+memory_bytes: 8589934592
+power: Now drawing from 'Battery Power'
+data_fs: /dev/disk3s5   228Gi   154Gi    41Gi    79%    1.7M  431M    0%   /System/Volumes/Data
+data_mount: /dev/disk3s5 on /System/Volumes/Data (apfs, local, journaled, nobrowse, protect, root data)
+open_file_limit: 1048576
+load_average_before: 16.01 21.74 15.34
+server: cppkv-server 0.1.0 (Boost 1.90.0, Asio 1.38.0, C++202002)
+CMAKE_BUILD_TYPE:STRING=Release
+CMAKE_CXX_COMPILER:FILEPATH=/usr/bin/c++
+CMAKE_CXX_FLAGS_RELEASE:STRING=-O3 -DNDEBUG -g
+duration_s: 5  warmup_s: 1  keys: 10000

@@ -14,6 +14,7 @@ add_library(cppkv_core STATIC
     cppkv/common/build_info.cpp
     cppkv/common/config.cpp
     cppkv/common/logger.cpp
+    cppkv/common/process_stats.cpp
     cppkv/persistence/append_log.cpp
     cppkv/persistence/log_format.cpp
     cppkv/persistence/posix_file.cpp

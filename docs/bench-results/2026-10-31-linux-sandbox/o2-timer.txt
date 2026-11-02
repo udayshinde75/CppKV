@@ -1,0 +1,44 @@
+# O2: closed loop, 1 client, 3 s window after 1 s warm-up, 1000 keys, in memory (Release, GCC 13.3).
+# columns: throughput req/s, p50 us, p99 us
+# --- before the fix (timer re-armed for every read and write) ---
+rep=1 threads=1 idle=300 clients=1 tput,p50,p99=24712,39.7,87.6
+rep=1 threads=1 idle=0   clients=1 tput,p50,p99=25098,37.4,86.0
+rep=1 threads=4 idle=300 clients=1 tput,p50,p99=14974,57.9,185.3
+rep=1 threads=4 idle=0   clients=1 tput,p50,p99=20636,43.5,131.1
+rep=2 threads=1 idle=300 clients=1 tput,p50,p99=22530,42.0,95.7
+rep=2 threads=1 idle=0   clients=1 tput,p50,p99=23782,38.4,95.2
+rep=2 threads=4 idle=300 clients=1 tput,p50,p99=14563,59.4,193.5
+rep=2 threads=4 idle=0   clients=1 tput,p50,p99=20910,42.2,127.0
+rep=3 threads=1 idle=300 clients=1 tput,p50,p99=24449,38.9,85.0
+rep=3 threads=1 idle=0   clients=1 tput,p50,p99=22729,42.2,102.4
+rep=3 threads=4 idle=300 clients=1 tput,p50,p99=15253,54.8,210.9
+rep=3 threads=4 idle=0   clients=1 tput,p50,p99=21485,41.5,122.9
+# --- after the fix (timer armed once, re-arms itself) ---
+rep=1 threads=1 idle=0   clients=1 tput,p50,p99=25944,37.6,78.3
+rep=2 threads=1 idle=0   clients=1 tput,p50,p99=25544,36.9,75.3
+rep=3 threads=1 idle=0   clients=1 tput,p50,p99=25561,36.9,74.2
+rep=1 threads=1 idle=300 clients=1 tput,p50,p99=25068,37.4,79.4
+rep=2 threads=1 idle=300 clients=1 tput,p50,p99=23970,38.9,83.5
+rep=3 threads=1 idle=300 clients=1 tput,p50,p99=23772,38.7,111.1
+rep=1 threads=4 idle=0   clients=1 tput,p50,p99=21403,40.4,126.5
+rep=2 threads=4 idle=0   clients=1 tput,p50,p99=20642,42.5,134.1
+rep=3 threads=4 idle=0   clients=1 tput,p50,p99=21309,41.0,129.5
+rep=1 threads=4 idle=300 clients=1 tput,p50,p99=21417,41.0,122.9
+rep=2 threads=4 idle=300 clients=1 tput,p50,p99=21218,41.7,120.3
+rep=3 threads=4 idle=300 clients=1 tput,p50,p99=21017,42.2,123.4
+
+# strace -f -c, 1 client closed loop, 3 s (strace slows the server ~10x; counts per request matter, not times)
+# before the fix, --threads 1: 6962 requests
+#   timerfd_settime 13925, epoll_wait 13935, sendto 6962, recvfrom 6964
+# before the fix, --threads 4: 3599 requests
+#   futex 70741, epoll_wait 6459, timerfd_settime 7199, sendto 3599, recvfrom 3603
+# after the fix, --threads 4: 5505 requests
+#   futex 78269, epoll_wait 6355, sendto 5505, recvfrom 5529   (timerfd_settime no longer in the list)
+
+# O3 after the fix: CPU per request from the server's getrusage, 1 client, 3 s
+rep=1 threads=1 tput=25700 cpu_us_per_req=20.6 sys%=82
+rep=1 threads=4 tput=19060 cpu_us_per_req=51.1 sys%=79
+rep=2 threads=1 tput=21940 cpu_us_per_req=22.8 sys%=81
+rep=2 threads=4 tput=19606 cpu_us_per_req=49.5 sys%=82
+rep=3 threads=1 tput=21475 cpu_us_per_req=24.0 sys%=83
+rep=3 threads=4 tput=21659 cpu_us_per_req=46.4 sys%=80

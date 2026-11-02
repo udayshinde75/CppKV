@@ -32,14 +32,17 @@ add_executable(cppkv_unit_tests
     unit/config_test.cpp
     unit/connection_handler_test.cpp
     unit/kv_store_test.cpp
+    unit/latency_histogram_test.cpp
     unit/line_framer_test.cpp
+    unit/load_options_test.cpp
     unit/log_format_test.cpp
     unit/logger_test.cpp
+    unit/process_stats_test.cpp
     unit/request_parser_test.cpp
     unit/response_encoder_test.cpp
     unit/session_registry_test.cpp
 )
-target_link_libraries(cppkv_unit_tests PRIVATE cppkv_core GTest::gtest_main)
+target_link_libraries(cppkv_unit_tests PRIVATE cppkv_core cppkv_loadgen GTest::gtest_main)
 cppkv_set_warnings(cppkv_unit_tests)
 
 # PRE_TEST: list the tests when CTest runs, not at build time. Building does not
@@ -54,11 +57,12 @@ gtest_discover_tests(cppkv_unit_tests
 # a test failure, even when ctest is run without a preset.
 # ---------------------------------------------------------------------------
 add_executable(cppkv_integration_tests
+    integration/loadgen_test.cpp
     integration/operations_test.cpp
     integration/persistence_test.cpp
     integration/server_test.cpp
 )
-target_link_libraries(cppkv_integration_tests PRIVATE cppkv_core GTest::gtest_main)
+target_link_libraries(cppkv_integration_tests PRIVATE cppkv_core cppkv_loadgen GTest::gtest_main)
 cppkv_set_warnings(cppkv_integration_tests)
 
 # The crash tests launch the real server binary and kill it with SIGKILL.
