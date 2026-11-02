@@ -2,7 +2,8 @@
 
 ## Current phase
 
-**Phase 9 — CI and quality: complete locally; the workflow runs on GitHub with the next push (by the owner).**
+**Phase 10 — Portfolio release: complete locally; awaiting the first CI result, the macOS run and the owner's approval
+to tag v1.0.0.**
 
 ## Completed
 
@@ -164,6 +165,17 @@
   error counting were untested → `LoadReportFormat` 6, `LoadgenFakeServer` 3, 2 CLI tests, enumerated config
   values; 3 mutations of them caught.
 
+### Phase 10 — Portfolio release (2026-11-02)
+
+- Version 1.0.0 (`project(VERSION)`), `CHANGELOG.md`.
+- README rewritten for a first-time reader: what it does, quick start, design diagram (Mermaid, render-checked
+  with mmdc), measured results with caveats, limitations, repository map; reference sections kept.
+- `scripts/demo.sh`: commands, errors, pipelining, a request split across writes, kill -9 + recovery, SIGTERM
+  (exit 0), short load test — bash `/dev/tcp` only, temporary directory, verified on Linux.
+- `docs/code-tour.md`: reading order, tests worth reading, where to look for what.
+- Phase 9 confirmed on the Mac: `ci` 234/234; committed and pushed (`fcd2af7`). First GitHub Actions result: not
+  yet seen (private repository; no access from this session).
+
 ## Environment
 
 - **Linux sandbox:** Ubuntu 24.04.5 x86_64; GCC 13.3.0, Clang 18.1.3; CMake 3.28.3 + 4.4.0; Boost 1.83.0 + 1.90.0.
@@ -272,7 +284,6 @@ cmake --preset bench && cmake --build --preset bench   # Release + micro-benchma
 
 ## Next phase
 
-**Phase 10 — Portfolio release:** README rewritten for a reader who has never seen the project (what it is, design
-in diagrams, measured results with their caveats, limitations), a scripted demo, a short "how to read this code"
-guide, a release tag (with permission), and resume bullets limited to verified features. Before it: the first
-GitHub Actions run must be green (owner pushes; failures are fixed here first).
+None planned: v1.0 completes the roadmap (Phases 0–10). Candidates for a v1.1, each with a before/after
+measurement (`docs/benchmarks.md` §6): group commit for `--sync always` (largest measured effect), log-record
+encoding outside the store lock / faster CRC-32, one `io_context` per thread; log compaction (functional).

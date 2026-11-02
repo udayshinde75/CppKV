@@ -51,6 +51,8 @@ pipelined input, request-size limits, unit tests and real-TCP integration tests.
 
 **v1.0 (end of Phase 10):** the project's Definition of Done — concurrent clients, AOF recovery with a stated
 durability guarantee, graceful shutdown, sanitizer-clean CI on Linux and macOS, measured benchmarks, portfolio docs.
+*Status (2026-11-02): all met — ADRs 0002–0004, `docs/benchmarks.md`, `docs/quality.md`, README; released as
+1.0.0 ([`CHANGELOG.md`](../CHANGELOG.md)).*
 
 **Non-goals for v1.0** (listed so scope creep is a conscious decision):
 
@@ -353,7 +355,7 @@ a misbehaving client.
 
 ---
 
-## 11. Repository layout (planned; created incrementally)
+## 11. Repository layout
 
 ```
 CppKV/

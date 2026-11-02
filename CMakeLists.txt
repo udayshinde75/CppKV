@@ -6,7 +6,7 @@
 cmake_minimum_required(VERSION 3.25...4.4)
 
 project(CppKV
-    VERSION 0.1.0
+    VERSION 1.0.0
     DESCRIPTION "Educational Redis-inspired key-value server"
     LANGUAGES CXX)
 

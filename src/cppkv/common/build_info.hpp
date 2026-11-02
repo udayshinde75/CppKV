@@ -16,7 +16,7 @@ namespace cppkv {
 [[nodiscard]] std::string asio_version();
 
 // One-line summary printed by `cppkv-server --version`, e.g.
-//   "cppkv-server 0.1.0 (Boost 1.90.0, Asio 1.38.0, C++202002)"
+//   "cppkv-server 1.0.0 (Boost 1.90.0, Asio 1.38.0, C++202002)"
 [[nodiscard]] std::string build_summary();
 
 } // namespace cppkv

@@ -1,187 +1,197 @@
 # CppKV
 
-An educational, Redis-inspired key-value database server written in modern C++20.
+[![CI](https://github.com/udayshinde75/CppKV/actions/workflows/ci.yml/badge.svg)](https://github.com/udayshinde75/CppKV/actions/workflows/ci.yml)
 
-CppKV accepts TCP clients, speaks a small documented text protocol, and stores string keys and values in memory.
-It is being built phase by phase toward concurrent clients, append-only-log recovery, sanitizer-clean tests,
-CI on Linux and macOS, and honestly measured benchmarks.
+A key-value database server in modern C++20, built to be **correct under concurrency, crashes and bad input, and
+honestly measured**. Clients connect over TCP and use a small, documented text protocol; every write goes to a
+checksummed append-only log before it is acknowledged, so data survives `kill -9`.
 
-CppKV is an independent learning project. It does not reuse Redis code and does not aim for Redis
+CppKV is an independent learning project inspired by Redis. It reuses no Redis code and does not aim for Redis
 protocol or feature compatibility.
 
-## Status
+```console
+$ nc 127.0.0.1 7379
+SET city Frankfurt am Main
+OK
+GET city
+VALUE 17 Frankfurt am Main
+DEL city
+INT 1
+QUIT
+BYE
+```
 
-**Phase 9 — checked in CI.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads and
-supports `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles
-fragmented and pipelined input. Every change is written to a checksummed append-only log before it is acknowledged
-([ADR 0003](docs/adr/0003-persistence.md)). SIGINT/SIGTERM shut it down gracefully; idle and stalled connections
-time out; connection, request and output sizes are bounded ([ADR 0004](docs/adr/0004-operations.md)).
-Micro-benchmarks and a load generator measure it; the method, the machines and every result are in
-[`docs/benchmarks.md`](docs/benchmarks.md). Numbers there are specific to the machine they were measured on.
-A GitHub Actions workflow builds and tests it on Linux (GCC, Clang, ASan+UBSan+LSan, TSan) and macOS with warnings
-as errors; how it is checked, test coverage (94 % of lines) and what is not covered: [`docs/quality.md`](docs/quality.md).
+## What it does
 
-## Planned feature set (v1.0)
+- **Seven commands** — `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE`, `QUIT` — over a line protocol that handles
+  requests split across TCP reads and many requests in one read ([protocol spec](docs/protocol.md)).
+- **Many clients at once** on a fixed pool of I/O threads (Boost.Asio), with a connection limit
+  ([ADR 0002](docs/adr/0002-concurrency-model.md)).
+- **Durable writes:** an append-only log with a CRC per record, written *before* the change is applied, with a
+  choice between syncing every write, every second, or never. After a crash it replays the log; a half-written
+  last record is cut off, real corruption stops the server instead of silently losing data
+  ([ADR 0003](docs/adr/0003-persistence.md)).
+- **Operable:** graceful shutdown on Ctrl-C/SIGTERM that answers what was already sent, timeouts for idle and
+  stalled clients, bounded memory per client, recovery from running out of file descriptors, clear log lines and
+  exit codes ([ADR 0004](docs/adr/0004-operations.md)).
+- **Measured:** micro-benchmarks and a load generator with correct latency percentiles; two real problems were
+  found by measuring that no test could see ([benchmarks](docs/benchmarks.md)).
+- **Checked:** 234 tests, sanitizer-clean (AddressSanitizer, UndefinedBehaviorSanitizer, LeakSanitizer,
+  ThreadSanitizer), 94 % line coverage, deliberate-bug ("mutation") checks, CI on Linux and macOS
+  ([quality](docs/quality.md)).
 
-- Commands: `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE`, `QUIT`
-- Line-based text protocol that correctly handles fragmented and pipelined TCP input
-- Bounded resources: request size, connection count, per-client output buffering
-- Concurrent clients with a documented, sanitizer-validated concurrency model
-- Append-only log with CRC-checked records and a documented durability guarantee
-- Graceful shutdown on SIGINT/SIGTERM
-- Unit and integration tests (GoogleTest), micro- and end-to-end benchmarks (Google Benchmark + load generator)
+## Try it
 
-Features appear in this list as *implemented* only once they are built and tested.
+```bash
+# macOS:           brew install cmake ninja boost
+# Ubuntu 24.04:    sudo apt install build-essential cmake ninja-build libboost-dev git
+cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 
-## Technology
+scripts/demo.sh                          # 2-minute tour: commands, pipelining, kill -9 and recovery, load test
+./build/debug/src/cppkv-server           # or run it yourself: 127.0.0.1:7379, data in ./data
+```
 
-C++20 · CMake · Boost.Asio · GoogleTest · Google Benchmark · ASan/UBSan/TSan · GitHub Actions
+## How it works
 
-Targets: macOS on Apple Silicon (development) and Linux (validation).
+```mermaid
+flowchart LR
+    C[TCP clients] -->|bytes| SE
+    subgraph server [cppkv-server]
+        S[TcpServer<br/>accept, limits, shutdown] -->|one per connection| SE[ClientSession<br/>socket I/O only]
+        SE -->|bytes| H
+        subgraph H [ConnectionHandler — no sockets, unit-tested with plain strings]
+            F[LineFramer] -->|lines| P[RequestParser] -->|Request| D[CommandDispatcher] -->|Response| E[ResponseEncoder]
+        end
+        D -->|under one mutex| K[(KvStore<br/>hash map)]
+        D -->|log first, then apply| L[AppendLog]
+        E -->|bytes| SE
+    end
+    L -->|write + fsync| DISK[(cppkv.log)]
+```
 
-## Documentation
+- **Sans-I/O core.** Everything from bytes-in to bytes-out lives in `ConnectionHandler`, which has no sockets, so
+  every protocol rule, including every way TCP can split a request, is tested with plain strings. Only
+  `ClientSession` and `TcpServer` touch the network.
+- **Threads.** One `io_context` runs on `--threads` threads; each connection has a *strand*, so its handlers never
+  run concurrently; the store is shared under one `std::mutex`. A slow client costs memory, never a thread.
+- **Write path.** `SET` → encode a record (length + CRC-32) → `write` → `fsync` (per `--sync`) → update memory →
+  `OK`. The log and memory change under the same lock, so the log order is the order clients observed.
+- **Back-pressure.** A connection produces at most ~64 KiB of replies before they are written, and stops reading
+  while a write is blocked, so a client that never reads cannot make the server buffer without bound.
 
-- [`docs/architecture.md`](docs/architecture.md) — requirements, components, protocol draft, phase plan, risks
-- [`docs/adr/`](docs/adr/) — architecture decision records: server model, concurrency, persistence and durability
-- [`docs/protocol.md`](docs/protocol.md) — wire protocol specification: requests, responses, errors, limits
-- [`docs/benchmarks.md`](docs/benchmarks.md) — how performance is measured, results, and what they led to
-- [`docs/quality.md`](docs/quality.md) — CI, sanitizers, mutation checks, coverage, static analysis, known gaps
+The full design, the alternatives that were rejected and why: [`docs/architecture.md`](docs/architecture.md) and
+the [decision records](docs/adr/).
 
-## Build
+## Performance
 
-### Requirements
+Measured with this repository's tools on a MacBook Air M2 (8 cores; client and server on the same machine, one
+run on battery — see the caveats) and a 2-vCPU Linux cloud VM. Requests are 90 % `GET` / 10 % `SET` of 16-byte
+values unless stated; "in flight" is how many requests each client sends before waiting for replies.
+
+| Workload | MacBook Air M2 | Linux VM (2 vCPU) |
+|----------|---------------:|------------------:|
+| 1 client, 1 in flight (in memory) | 44 857 req/s, p50 22 µs, p99 52 µs | 21 405 req/s, p50 41 µs, p99 120 µs |
+| 16 clients, 1 in flight (in memory) | 195 977 req/s, p99 175 µs | 84 762 req/s, p99 627 µs |
+| 4 clients, 32 in flight (in memory) | 2 562 970 req/s | 915 315 req/s |
+| SET only, 16 clients, log without fsync | 70 228 req/s | 76 836 req/s |
+| SET only, 16 clients, fsync before every reply | 511 req/s | 4 977 req/s |
+
+What the numbers say, with the evidence in [`docs/benchmarks.md`](docs/benchmarks.md):
+- At one request in flight, 73–86 % of the server's CPU time is in the kernel (TCP, wake-ups); sending 32 requests
+  per round trip is 15–26× faster. The store and the lock are not the bottleneck.
+- A durable `SET` costs one flush to the device: `F_FULLFSYNC` takes ~2.7 ms on the M2's SSD, so full durability
+  is slow there; batching several clients' writes into one flush ("group commit") is the measured next step.
+- Measuring found two problems that no functional test could see: the server did not disable Nagle's algorithm, so
+  some replies waited for the client's next request (p95 6× lower after the fix), and an idle timer re-armed on
+  every request cost ~30 % of throughput with one client on four threads.
+
+## Limitations
+
+By design for v1 (see [non-goals](docs/architecture.md#3-milestones-mvp-and-non-goals)): byte-string values only,
+and no `CR`/`LF` inside values; no expiry, eviction, replication, transactions, authentication or TLS; not
+compatible with Redis clients. Also:
+- The log grows without bound (no compaction or snapshots), so restart time grows with history.
+- With `--sync always`, every `SET` waits for its own fsync while holding the store lock (no group commit yet).
+- The hash function is unseeded: do not expose CppKV to untrusted clients (hash flooding).
+- With one client, more I/O threads cost CPU without adding throughput (measured; `--threads 1` is the most
+  efficient setting today).
+
+## Repository
+
+| Path | Contents |
+|------|----------|
+| [`src/cppkv/`](src/cppkv/) | `protocol/` framing, parsing, encoding · `store/` the map · `persistence/` log and recovery · `server/` sessions, dispatcher, TCP server · `common/` config, logging |
+| [`tests/`](tests/) | `unit/` (no sockets) and `integration/` (real TCP, real server processes, signals, crashes) |
+| [`bench/`](bench/), [`tools/loadgen/`](tools/loadgen/) | Google Benchmark micro-benchmarks; the `cppkv-loadgen` load generator |
+| [`scripts/`](scripts/) | `demo.sh`, `bench_load.sh`, `coverage.sh` |
+| [`docs/`](docs/) | [architecture](docs/architecture.md), [protocol](docs/protocol.md), [decision records](docs/adr/), [benchmarks](docs/benchmarks.md), [quality](docs/quality.md), [code tour](docs/code-tour.md) |
+
+[`PROGRESS.md`](PROGRESS.md) records how it was built, phase by phase (requirements → skeleton → store → TCP →
+protocol → concurrency → persistence → reliability → benchmarks → CI → release), with every test result and
+every bug found on the way. [`CHANGELOG.md`](CHANGELOG.md) summarises the release.
+
+---
+
+## Build reference
 
 | Tool | Minimum | Tested |
 |------|---------|--------|
 | C++20 compiler | GCC 13 / Clang 18 / Apple clang 21 | same |
-| CMake | 3.25 | 3.28.3, 4.4.0 |
+| CMake | 3.25 | 3.28.3, 4.4 |
 | Ninja | any recent | 1.11, 1.13 |
 | Boost (headers only) | 1.83 | 1.83.0, 1.90.0 |
 
-GoogleTest 1.17.0 is downloaded automatically during configuration (pinned by SHA-256), so the first
-configure needs internet access. The `bench` and `ci` presets also fetch Google Benchmark 1.10.0 with Git
-(pinned by commit hash), so they need `git` as well.
-
-```bash
-# macOS (Homebrew)
-brew install cmake ninja boost
-
-# Ubuntu 24.04
-sudo apt install build-essential cmake ninja-build libboost-dev
-```
-
-### Configure, build, test
-
-```bash
-cmake --preset debug          # configure into build/debug
-cmake --build --preset debug  # compile
-ctest --preset debug          # run all tests
-ctest --preset debug -L integration   # only the TCP tests (labels: unit, integration)
-
-./build/debug/src/cppkv-server --version
-```
+GoogleTest 1.17.0 is downloaded during the first configure (pinned by SHA-256). The `bench` and `ci` presets also
+fetch Google Benchmark 1.10.0 with Git (pinned by commit hash).
 
 | Preset | Purpose |
 |--------|---------|
 | `debug` | Day-to-day development |
 | `release` | Optimised build |
-| `bench` | Release optimisation + debug info, with the micro-benchmarks (for measuring and profiling) |
-| `asan-ubsan` | AddressSanitizer + UndefinedBehaviorSanitizer |
+| `asan-ubsan` | AddressSanitizer + UndefinedBehaviorSanitizer (+ LeakSanitizer on Linux) |
 | `tsan` | ThreadSanitizer (cannot be combined with ASan) |
-| `ci` | Debug with warnings treated as errors; also compiles and smoke-runs the benchmarks |
-
-## Run
+| `ci` | Debug with warnings as errors; compiles and smoke-runs the benchmarks — what CI runs |
+| `bench` | Release optimisation + debug info, with the micro-benchmarks |
 
 ```bash
-./build/debug/src/cppkv-server                  # listens on 127.0.0.1:7379
-./build/debug/src/cppkv-server --port 0         # any free port; the log line shows which
-./build/debug/src/cppkv-server --bind ::1 --port 7380
-./build/debug/src/cppkv-server --threads 8 --max-connections 500
+cmake --preset <preset> && cmake --build --preset <preset> && ctest --preset <preset>
+ctest --preset debug -L integration      # only the TCP tests (labels: unit, integration, bench)
+scripts/coverage.sh                      # line/function coverage (Linux, GCC)
+```
+
+## Run reference
+
+```bash
+./build/debug/src/cppkv-server --help                      # every option with its default
+./build/debug/src/cppkv-server --port 0                    # any free port; the log line shows which
 ./build/debug/src/cppkv-server --data-dir /tmp/kv --sync interval
-./build/debug/src/cppkv-server --in-memory      # no persistence
+./build/debug/src/cppkv-server --in-memory --threads 1     # no persistence
 ./build/debug/src/cppkv-server --idle-timeout 60 --shutdown-timeout 5 --log-level debug
-./build/debug/src/cppkv-server --help           # every option, with defaults
 ```
 
-By default the log is `./data/cppkv.log`, relative to the directory you start the server in, and every write is
-`fsync`ed before `OK` (`--sync always`). Try it: `SET` something, stop the server (even with `kill -9`), start it
-again and `GET` it back. If the log is damaged anywhere except its last record, the server refuses to start and
-says where; `--recovery truncate` keeps the valid part instead.
+- **Data:** `./data/cppkv.log`, relative to where the server starts. `--sync always` (default) flushes to the
+  device before every reply; `interval` about once per second; `never` leaves it to the OS
+  ([what each guarantees](docs/protocol.md#8-durability)). A log damaged anywhere but its last record stops
+  startup with the offset; `--recovery truncate` keeps the valid part instead.
+- **Stopping:** Ctrl-C or SIGTERM answers the requests already received, closes connections, syncs and exits 0;
+  a second signal stops immediately. Exit status 1 means a startup or log failure, 2 a usage error.
+- **Talking to it:** any line-based TCP client, e.g. `nc 127.0.0.1 7379`. Pipelining:
+  `printf 'SET a 1\nSET b 2\nDBSIZE\nQUIT\n' | nc 127.0.0.1 7379`.
 
-Stop it with Ctrl-C (or `kill`, i.e. SIGTERM): connected clients get replies to the requests they already sent,
-then the server closes them, syncs the log and exits with status 0. A second Ctrl-C stops immediately.
-In a second terminal, talk to it with `nc` (installed on macOS and most Linux systems):
-
-```console
-$ nc 127.0.0.1 7379
-PING
-PONG
-SET city Frankfurt am Main
-OK
-GET city
-VALUE 17 Frankfurt am Main
-GET nope
-NIL
-EXISTS city
-INT 1
-DBSIZE
-INT 1
-DEL city
-INT 1
-FLY away
-ERR UNKNOWN_COMMAND unknown command 'FLY'
-QUIT
-BYE
-```
-
-`VALUE <len> <bytes>` carries the exact byte length. Full rules: [`docs/protocol.md`](docs/protocol.md).
-Two scripted demos:
-
-```bash
-# Several requests in one write: one reply each
-printf 'SET a 1\r\nSET b 2\r\nDBSIZE\r\nQUIT\r\n' | nc 127.0.0.1 7379
-
-# One request split across writes: the server reassembles it
-(printf 'SET na'; sleep 1; printf 'me hello\nGET name\n'; sleep 1; printf 'QUIT\n') | nc 127.0.0.1 7379
-```
-
-Open several `nc` sessions at once: they are served concurrently and see each other's writes. Once
-`--max-connections` clients are connected, the next one gets `ERR BUSY too many connections`.
-The design is explained in [ADR 0002](docs/adr/0002-concurrency-model.md).
-
-## Measure
+## Measure reference
 
 ```bash
 cmake --preset bench && cmake --build --preset bench
-./build/bench/bench/cppkv_micro_bench                 # Google Benchmark: store, protocol, log, dispatcher
-scripts/bench_load.sh                                 # load-test matrix: fresh server per run, CSV + environment
-
-# Or drive a running server yourself:
-./build/bench/tools/loadgen/cppkv-loadgen --port 7379 --clients 16 --duration 10      # closed loop
-./build/bench/tools/loadgen/cppkv-loadgen --port 7379 --clients 16 --rate 20000       # open loop, fixed rate
+./build/bench/bench/cppkv_micro_bench                                          # micro-benchmarks
+scripts/bench_load.sh                                                          # the full load matrix (~5 min)
+./build/bench/tools/loadgen/cppkv-loadgen --port 7379 --clients 16 --duration 10   # closed loop
+./build/bench/tools/loadgen/cppkv-loadgen --port 7379 --clients 16 --rate 20000    # open loop, fixed rate
 ```
-
-`cppkv-loadgen` reports throughput and p50/p95/p99/p99.9 latency; in open-loop mode it measures from each
-request's *scheduled* send time, so client-side delays are not hidden. See
-[`docs/benchmarks.md`](docs/benchmarks.md) for the method and its limits.
-
-## Check
-
-```bash
-ctest --preset ci                 # what CI runs (after cmake --preset ci && cmake --build --preset ci)
-scripts/coverage.sh               # line/function coverage of src/ and tools/ (Linux, GCC)
-```
-
-CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the Linux jobs on every push and pull request and the
-macOS job on pushes to `main`; the macOS sanitizer jobs run on demand from the Actions tab.
 
 ## IDE notes
 
-**CLion:** open the folder; CLion picks up `CMakePresets.json` and lists the presets as CMake profiles
-(enable the ones you want under *Settings → Build, Execution, Deployment → CMake*).
-
-**Boost not found?** If CMake (or CLion) cannot find Homebrew's Boost, create a local, git-ignored
-`CMakeUserPresets.json`:
+**CLion:** open the folder; it lists the presets as CMake profiles (enable them under *Settings → Build, Execution,
+Deployment → CMake*). If it cannot find Homebrew's Boost, add a git-ignored `CMakeUserPresets.json`:
 
 ```json
 {
