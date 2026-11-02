@@ -2,7 +2,7 @@
 
 ## Current phase
 
-**Phase 8 — Performance benchmarking: complete (Linux + macOS); awaiting commit and approval.**
+**Phase 9 — CI and quality: complete locally; the workflow runs on GitHub with the next push (by the owner).**
 
 ## Completed
 
@@ -149,6 +149,21 @@
 - Tests: `LatencyHistogram` 8, `LoadOptions` 5, `ProcessStats` 3, `LoadgenTest` 6 (counts match server state,
   exact open-loop request count, misses, server stop and connection limit reported as failures).
 
+### Phase 9 — CI and quality (2026-11-02)
+
+- `.github/workflows/ci.yml`: Linux (ubuntu-24.04, Boost 1.83 from apt) GCC `ci`, Clang `ci`, Clang `release`,
+  GCC ASan+UBSan+LSan, GCC TSan on every push/PR; macOS (macos-26, Homebrew Boost) AppleClang `ci` on pushes to
+  main; macOS sanitizers on demand. Actions pinned by commit hash, read-only token, docs-only changes skipped,
+  superseded runs cancelled, test log uploaded on failure. Validated with actionlint 1.7.12 (checksum-verified).
+- Quality audit (`docs/quality.md`): LeakSanitizer shown to fire with the preset's options; coverage via
+  `scripts/coverage.sh` (gcov JSON + `coverage_summary.py`); clang-tidy 18 pass — 3 kinds of finding fixed
+  (int-multiplication widening ×7, no-op move ×2, missing nodiscard), the rest triaged and documented.
+- Coverage: 90.8 % → **93.7 % of lines**, 96.6 % → **99.2 % of functions** (src/ + tools/); the rest is mostly
+  fault-injection-only error handling, listed in docs/quality.md.
+- Coverage gap found and closed: the load generator's CSV (read by `bench_load.sh` by column number) and its
+  error counting were untested → `LoadReportFormat` 6, `LoadgenFakeServer` 3, 2 CLI tests, enumerated config
+  values; 3 mutations of them caught.
+
 ## Environment
 
 - **Linux sandbox:** Ubuntu 24.04.5 x86_64; GCC 13.3.0, Clang 18.1.3; CMake 3.28.3 + 4.4.0; Boost 1.83.0 + 1.90.0.
@@ -185,6 +200,9 @@
 - Benchmarks (Phase 8): numbers are compared only within one machine; every optimisation needs a before/after
   measurement; `TCP_NODELAY` on; I/O timer armed once per stall window; store mutex kept (not a bottleneck);
   further optimisations are candidates awaiting the M2 measurements and approval.
+- CI (Phase 9): Linux jobs on every push/PR, macOS only on main and on demand (private-repo cost: macOS minutes
+  cost ~10× Linux); actions pinned to commit hashes; sanitizer jobs lower `vm.mmap_rnd_bits` to 28 (Ubuntu 24.04
+  runners' 32 bits break GCC 13's sanitizer runtimes).
 - GCC `-Wtsan` fence warning: accepted, not worked around (`BOOST_ASIO_DISABLE_FENCED_BLOCK` would change what is
   tested); no TSan reports observed; Clang TSan on macOS cross-checks.
 
@@ -194,6 +212,8 @@
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 cmake --preset asan-ubsan && cmake --build --preset asan-ubsan && ctest --preset asan-ubsan
 ctest --preset debug -L integration          # TCP tests only
+cmake --preset ci && cmake --build --preset ci && ctest --preset ci   # what CI runs
+scripts/coverage.sh                          # coverage (Linux, GCC)
 cmake --preset bench && cmake --build --preset bench   # Release + micro-benchmarks + load generator
 ./build/bench/bench/cppkv_micro_bench && scripts/bench_load.sh
 ./build/debug/src/cppkv-server --port 7379   # then: nc 127.0.0.1 7379, try SET/GET
@@ -219,6 +239,7 @@ cmake --preset bench && cmake --build --preset bench   # Release + micro-benchma
 | 2026-10-31 | macOS | Phase 7 (after fix): debug, asan-ubsan, tsan, ci | 199/199 run, 0 failed, no sanitizer reports (wildcard-bind test skipped on macOS by design; EMFILE test also skipped in asan-ubsan) |
 | 2026-10-31 | Linux | Same 12 configurations + `bench` (GCC/CMake 4.4/Boost 1.90, Clang/CMake 3.28/Boost 1.83) + ASan+UBSan and TSan with benchmarks — 16 total | Phase 8: 221/221 (222 with `bench.smoke` where benchmarks are built) in every configuration after one test fix (below); 0 warnings from CppKV code. Loadgen + operations tests repeated 10× under TSan and 10× under ASan+UBSan: 0 failures, 0 sanitizer reports. Two full 34-run load matrices: 0 errors |
 | 2026-11-02 | macOS | Phase 8: debug, asan-ubsan, tsan, ci; then `bench` (micro + 34-run load matrix) | 221/221 (ci 222/222) run, 0 failed, no sanitizer reports (wildcard-bind skipped by design; EMFILE also skipped in asan-ubsan). Benchmarks: all 34 load runs 0 errors; results in docs/benchmarks.md §4M (one run, on battery, after the builds) |
+| 2026-11-02 | Linux | The 5 CI job configurations (GCC/Clang `ci` and Clang `release` on CMake 3.28 + Boost 1.83 or 4.4 + 1.90; GCC ASan+UBSan+LSan and TSan on 3.28 + 1.83) | Phase 9: 234/234 (`ci`), 233/233 (release, sanitizers: no benchmark smoke test); 0 warnings from CppKV code; 0 sanitizer/leak reports. Workflow: actionlint clean. Not yet run on GitHub |
 
 ## Known issues
 
@@ -251,7 +272,7 @@ cmake --preset bench && cmake --build --preset bench   # Release + micro-benchma
 
 ## Next phase
 
-**Phase 9 — CI and quality:** GitHub Actions on Linux (GCC + Clang) and macOS (AppleClang) with `-Werror`, sanitizer
-jobs (ASan+UBSan, TSan, LSan on Linux), the benchmark smoke test; a clean build reproduced from the README; a
-final quality audit. Pushing to GitHub needs explicit permission. Optional before it, if approved: the Phase 8
-optimisation candidates (benchmarks §6), each with a before/after measurement.
+**Phase 10 — Portfolio release:** README rewritten for a reader who has never seen the project (what it is, design
+in diagrams, measured results with their caveats, limitations), a scripted demo, a short "how to read this code"
+guide, a release tag (with permission), and resume bullets limited to verified features. Before it: the first
+GitHub Actions run must be green (owner pushes; failures are fixed here first).

@@ -4,6 +4,7 @@
 
 #include <initializer_list>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -128,6 +129,29 @@ TEST(ParseCommandLine, ParsesPersistenceOptions) {
     EXPECT_EQ(parse({"--sync", "sometimes"}).action, cppkv::CliAction::usage_error);
     EXPECT_EQ(parse({"--recovery", "lenient"}).action, cppkv::CliAction::usage_error);
     EXPECT_EQ(parse({"--data-dir", ""}).action, cppkv::CliAction::usage_error);
+}
+
+// Every accepted spelling of the enumerated options maps to its value; the
+// defaults alone would not show that, e.g., "--sync always" is not misparsed.
+TEST(ParseCommandLine, EveryEnumeratedValueIsAccepted) {
+    using cppkv::LogLevel;
+    for (const auto& [text, level] : std::vector<std::pair<std::string_view, LogLevel>>{
+             {"debug", LogLevel::debug}, {"info", LogLevel::info}, {"warn", LogLevel::warn}, {"error", LogLevel::error}}) {
+        const auto result = parse({"--log-level", "error", "--log-level", text});   // later wins
+        ASSERT_EQ(result.action, cppkv::CliAction::run_server) << text;
+        EXPECT_EQ(result.config.log_level, level) << text;
+    }
+    using cppkv::SyncPolicy;
+    for (const auto& [text, policy] : std::vector<std::pair<std::string_view, SyncPolicy>>{
+             {"always", SyncPolicy::always}, {"interval", SyncPolicy::interval}, {"never", SyncPolicy::never}}) {
+        const auto result = parse({"--sync", "never", "--sync", text});
+        ASSERT_EQ(result.action, cppkv::CliAction::run_server) << text;
+        EXPECT_EQ(result.config.persistence.sync, policy) << text;
+        EXPECT_EQ(cppkv::to_string(policy), text);
+    }
+    EXPECT_EQ(parse({"--recovery", "truncate", "--recovery", "strict"}).config.persistence.recovery,
+              cppkv::RecoveryMode::strict);
+    EXPECT_EQ(parse({"--shutdown-timeout", "86401"}).action, cppkv::CliAction::usage_error);
 }
 
 } // namespace

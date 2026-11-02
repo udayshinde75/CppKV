@@ -16,7 +16,7 @@ inline constexpr std::size_t kMaxConnectionsLimit = 10'000;
 // The line limit must leave room for a SET record inside one log record
 // (log_format::kMaxPayloadBytes = 16 MiB); 8 MiB keeps a wide margin.
 inline constexpr std::size_t kMinLineBytes = 16;
-inline constexpr std::size_t kMaxLineBytes = 8 * 1024 * 1024;
+inline constexpr std::size_t kMaxLineBytes = std::size_t{8} * 1024 * 1024;
 inline constexpr std::uint32_t kMaxTimeoutSeconds = 86'400;   // one day
 
 // When the append-only log is flushed to stable storage (docs/adr/0003-persistence.md).
@@ -53,7 +53,7 @@ struct ServerConfig {
 
     // Maximum request line length in bytes, excluding the "\n" or "\r\n"
     // terminator (--max-line-bytes).
-    std::size_t max_line_bytes = 64 * 1024;
+    std::size_t max_line_bytes = std::size_t{64} * 1024;
 
     // Threads running the I/O event loop (and therefore request handling).
     // A fixed, small pool: the thread count never depends on the number of

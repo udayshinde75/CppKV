@@ -36,7 +36,7 @@ namespace asio = boost::asio;
 using tcp = asio::ip::tcp;
 using Clock = std::chrono::steady_clock;
 
-constexpr std::size_t kReadChunk = 64 * 1024;
+constexpr std::size_t kReadChunk = std::size_t{64} * 1024;
 constexpr std::size_t kPopulateBatch = 1'000;
 constexpr std::size_t kMaxOpenLoopBurst = 64;   // requests sent in one write when behind schedule
 constexpr auto kStartDelay = std::chrono::milliseconds{100};

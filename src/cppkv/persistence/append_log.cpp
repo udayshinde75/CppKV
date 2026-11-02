@@ -116,7 +116,7 @@ private:
     // True if every byte from `offset` to the end of the file is zero. File
     // systems may extend a file's size before its data reaches the disk; after
     // a power loss that region reads back as zeros.
-    bool rest_is_zero(std::uint64_t offset) const {
+    [[nodiscard]] bool rest_is_zero(std::uint64_t offset) const {
         std::array<char, 4096> chunk{};
         while (offset < file_size_) {
             const auto n = static_cast<std::size_t>(std::min<std::uint64_t>(chunk.size(), file_size_ - offset));

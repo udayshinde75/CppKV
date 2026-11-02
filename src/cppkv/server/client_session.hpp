@@ -51,12 +51,12 @@ namespace cppkv {
 class ClientSession : public std::enable_shared_from_this<ClientSession> {
 public:
     static constexpr std::size_t kReadChunkBytes = 4096;
-    static constexpr std::size_t kOutputFlushBytes = 64 * 1024;
+    static constexpr std::size_t kOutputFlushBytes = std::size_t{64} * 1024;
     static constexpr std::chrono::seconds kLingerTimeout{2};
-    static constexpr std::size_t kLingerMaxBytes = 64 * 1024;
+    static constexpr std::size_t kLingerMaxBytes = std::size_t{64} * 1024;
 
     struct Options {
-        std::size_t max_line_bytes = 64 * 1024;
+        std::size_t max_line_bytes = std::size_t{64} * 1024;
         std::chrono::steady_clock::duration io_timeout{};   // zero: no timeout
     };
 

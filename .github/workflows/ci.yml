@@ -1,0 +1,149 @@
+# CI for CppKV: every configuration that is tested locally, on clean GitHub-hosted runners.
+#
+# Cost (private repository, GitHub Free: $12 of compute per month): a Linux minute
+# costs $0.006, a macOS minute $0.062. So the Linux jobs run on every push and pull
+# request, the macOS build only on pushes to main (and on demand), and the macOS
+# sanitizer builds only on demand ("Run workflow" in the Actions tab). Changes that
+# touch only documentation do not start a run.
+#
+# Supply chain: third-party actions are pinned to full commit hashes (a tag can be
+# moved; a commit hash cannot), with the version in a comment. The token is
+# read-only.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
+  pull_request:
+    paths-ignore: ['**.md', 'docs/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the run that is still going.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux · ${{ matrix.name }}
+    runs-on: ubuntu-24.04          # GCC 13.3, Clang 18.1, CMake 3.31, Ninja preinstalled
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false             # one failing configuration must not hide the others
+      matrix:
+        include:
+          - { name: "GCC, -Werror, benchmarks smoke-run", cxx: g++,     preset: ci }
+          - { name: "Clang, -Werror, benchmarks smoke-run", cxx: clang++, preset: ci }
+          - { name: "Clang, Release -O3",                 cxx: clang++, preset: release }
+          - { name: "GCC, ASan + UBSan + LeakSanitizer",  cxx: g++,     preset: asan-ubsan }
+          - { name: "GCC, ThreadSanitizer",               cxx: g++,     preset: tsan }
+    env:
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The README's Ubuntu instructions: Boost from the distribution (1.83, the
+      # minimum CppKV supports). The other tools are preinstalled on the runner.
+      - name: Install Boost
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libboost-dev
+
+      # Ubuntu 24.04's kernel randomises mmap addresses with 32 bits of entropy;
+      # the sanitizer runtimes of GCC 13 expect at most 28 and abort at start-up
+      # ("unexpected memory mapping"). Lower it for the sanitizer jobs only.
+      - name: Make the address-space layout sanitizer-compatible
+        if: matrix.preset == 'asan-ubsan' || matrix.preset == 'tsan'
+        run: sudo sysctl vm.mmap_rnd_bits=28
+
+      - name: Tool versions
+        run: |
+          cmake --version | head -n 1
+          echo "ninja $(ninja --version)"
+          "$CXX" --version | head -n 1
+          dpkg-query -W libboost-dev
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+      - name: Keep the test log of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-log-linux-${{ matrix.cxx }}-${{ matrix.preset }}
+          path: build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  macos:
+    name: macOS · AppleClang, -Werror, benchmarks smoke-run
+    if: github.event_name != 'pull_request'
+    runs-on: macos-26              # Apple Silicon; Apple clang 21, CMake 4.4, Ninja preinstalled
+    timeout-minutes: 30
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Boost
+        run: brew install boost
+      - name: Tool versions
+        run: |
+          cmake --version | head -n 1
+          echo "ninja $(ninja --version)"
+          c++ --version | head -n 1
+          brew list --versions boost
+      - name: Configure
+        run: cmake --preset ci
+      - name: Build
+        run: cmake --build --preset ci
+      - name: Test
+        run: ctest --preset ci
+      - name: Keep the test log of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-log-macos-ci
+          path: build/ci/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+  macos-sanitizers:
+    name: macOS · ${{ matrix.preset }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [asan-ubsan, tsan]   # LeakSanitizer does not exist on macOS; Linux covers it
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install Boost
+        run: brew install boost
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+      - name: Keep the test log of a failed run
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: test-log-macos-${{ matrix.preset }}
+          path: build/${{ matrix.preset }}/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore
+          retention-days: 14

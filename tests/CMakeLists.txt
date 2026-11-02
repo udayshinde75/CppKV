@@ -35,6 +35,7 @@ add_executable(cppkv_unit_tests
     unit/latency_histogram_test.cpp
     unit/line_framer_test.cpp
     unit/load_options_test.cpp
+    unit/load_report_format_test.cpp
     unit/log_format_test.cpp
     unit/logger_test.cpp
     unit/process_stats_test.cpp
@@ -101,4 +102,16 @@ add_test(NAME cli.invalid_port
         "-DARGS=--port;65536"
         "-DEXPECTED_EXIT=2"
         "-DEXPECTED_STDERR=invalid port '65536'"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAndCheck.cmake")
+
+# The load generator's command line: help, and a usage error with exit status 2.
+add_test(NAME cli.loadgen_help COMMAND cppkv-loadgen --help)
+set_tests_properties(cli.loadgen_help PROPERTIES PASS_REGULAR_EXPRESSION "Usage: cppkv-loadgen")
+
+add_test(NAME cli.loadgen_conflicting_options
+    COMMAND ${CMAKE_COMMAND}
+        "-DCOMMAND=$<TARGET_FILE:cppkv-loadgen>"
+        "-DARGS=--rate;1000;--pipeline;8"
+        "-DEXPECTED_EXIT=2"
+        "-DEXPECTED_STDERR=--pipeline applies to the closed loop only"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/RunAndCheck.cmake")

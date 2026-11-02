@@ -376,13 +376,13 @@ CppKV/
 │   └── integration/          real TCP: server on an ephemeral port, client in-process
 ├── bench/                    Google Benchmark micro-benchmarks (Phase 8)
 ├── tools/loadgen/            cppkv-loadgen: closed/open-loop load generator (Phase 8)
-├── scripts/                  bench_load.sh: load-test matrix (Phase 8); demo helpers later
+├── scripts/                  bench_load.sh (Phase 8), coverage.sh (Phase 9); demo helpers later
 ├── docs/
 │   ├── architecture.md
 │   ├── protocol.md           (Phase 4)
 │   ├── benchmarks.md         (Phase 8)
 │   └── adr/                  short Architecture Decision Records
-├── .github/workflows/ci.yml  (Phase 9, or earlier — see §14)
+├── .github/workflows/ci.yml  GitHub Actions: Linux GCC/Clang/sanitizers, macOS (Phase 9)
 ├── README.md
 └── PROGRESS.md
 ```

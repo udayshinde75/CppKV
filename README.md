@@ -11,13 +11,15 @@ protocol or feature compatibility.
 
 ## Status
 
-**Phase 8 — measured.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads and
+**Phase 9 — checked in CI.** `cppkv-server` serves many TCP clients concurrently on a fixed pool of I/O threads and
 supports `PING`, `SET`, `GET`, `DEL`, `EXISTS`, `DBSIZE` and `QUIT` over a documented text protocol that handles
 fragmented and pipelined input. Every change is written to a checksummed append-only log before it is acknowledged
 ([ADR 0003](docs/adr/0003-persistence.md)). SIGINT/SIGTERM shut it down gracefully; idle and stalled connections
 time out; connection, request and output sizes are bounded ([ADR 0004](docs/adr/0004-operations.md)).
 Micro-benchmarks and a load generator measure it; the method, the machines and every result are in
 [`docs/benchmarks.md`](docs/benchmarks.md). Numbers there are specific to the machine they were measured on.
+A GitHub Actions workflow builds and tests it on Linux (GCC, Clang, ASan+UBSan+LSan, TSan) and macOS with warnings
+as errors; how it is checked, test coverage (94 % of lines) and what is not covered: [`docs/quality.md`](docs/quality.md).
 
 ## Planned feature set (v1.0)
 
@@ -43,6 +45,7 @@ Targets: macOS on Apple Silicon (development) and Linux (validation).
 - [`docs/adr/`](docs/adr/) — architecture decision records: server model, concurrency, persistence and durability
 - [`docs/protocol.md`](docs/protocol.md) — wire protocol specification: requests, responses, errors, limits
 - [`docs/benchmarks.md`](docs/benchmarks.md) — how performance is measured, results, and what they led to
+- [`docs/quality.md`](docs/quality.md) — CI, sanitizers, mutation checks, coverage, static analysis, known gaps
 
 ## Build
 
@@ -161,6 +164,16 @@ scripts/bench_load.sh                                 # load-test matrix: fresh 
 `cppkv-loadgen` reports throughput and p50/p95/p99/p99.9 latency; in open-loop mode it measures from each
 request's *scheduled* send time, so client-side delays are not hidden. See
 [`docs/benchmarks.md`](docs/benchmarks.md) for the method and its limits.
+
+## Check
+
+```bash
+ctest --preset ci                 # what CI runs (after cmake --preset ci && cmake --build --preset ci)
+scripts/coverage.sh               # line/function coverage of src/ and tools/ (Linux, GCC)
+```
+
+CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the Linux jobs on every push and pull request and the
+macOS job on pushes to `main`; the macOS sanitizer jobs run on demand from the Actions tab.
 
 ## IDE notes
 

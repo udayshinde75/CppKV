@@ -31,7 +31,7 @@ inline constexpr std::size_t kRecordHeaderBytes = 8;    // payload_len + crc32
 // below this (key <= 512 bytes, request line <= 64 KiB). The bound exists so
 // that a corrupted length field (e.g. 0xFFFFFFFF) is recognised as corruption
 // instead of triggering a 4 GiB allocation during recovery.
-inline constexpr std::size_t kMaxPayloadBytes = 16 * 1024 * 1024;
+inline constexpr std::size_t kMaxPayloadBytes = std::size_t{16} * 1024 * 1024;
 
 enum class Op : std::uint8_t { set = 1, del = 2 };
 

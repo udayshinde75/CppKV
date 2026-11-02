@@ -24,8 +24,10 @@ namespace cppkv {
 // not been modified.
 class LogCorruptedError : public std::runtime_error {
 public:
-    LogCorruptedError(std::string message, std::uint64_t offset)
-        : std::runtime_error{std::move(message)}, offset_{offset} {}
+    // const&: std::runtime_error copies the message anyway (it has no
+    // std::string&& constructor), so taking it by value and moving gained nothing.
+    LogCorruptedError(const std::string& message, std::uint64_t offset)
+        : std::runtime_error{message}, offset_{offset} {}
     [[nodiscard]] std::uint64_t offset() const noexcept { return offset_; }
 
 private:

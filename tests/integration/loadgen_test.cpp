@@ -12,16 +12,22 @@
 
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/ip/tcp.hpp>
+#include <boost/asio/read_until.hpp>
+#include <boost/asio/streambuf.hpp>
+#include <boost/asio/write.hpp>
 
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <cstdint>
 #include <future>
+#include <istream>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <vector>
 
 using cppkv::loadgen::LoadOptions;
 using cppkv::loadgen::LoadReport;
@@ -139,6 +145,91 @@ TEST_F(LoadgenTest, ConnectionLimitIsReportedAsAFailure) {
     o.clients = 4;
     const LoadReport r = cppkv::loadgen::run_load(o);
     EXPECT_FALSE(r.failure.empty());
+}
+
+// A stand-in server that answers every request line with the same reply, to
+// check that the load generator recognises wrong answers. It serves exactly
+// `connections` connections (populate + clients), each until the client closes.
+class FakeServer {
+public:
+    // The acceptor's constructor already binds and listens.
+    FakeServer(std::string reply, int connections) : reply_{std::move(reply)} {
+        accept_thread_ = std::jthread{[this, connections] {
+            for (int i = 0; i < connections; ++i) {
+                boost::asio::ip::tcp::socket socket{io_};
+                acceptor_.accept(socket);
+                serving_.emplace_back([this, s = std::move(socket)]() mutable { serve(s); });
+            }
+        }};
+    }
+    [[nodiscard]] std::uint16_t port() const { return acceptor_.local_endpoint().port(); }
+
+private:
+    void serve(boost::asio::ip::tcp::socket& socket) const {
+        boost::asio::streambuf input;
+        boost::system::error_code ec;
+        for (;;) {
+            boost::asio::read_until(socket, input, '\n', ec);
+            if (ec) {
+                return;   // the load generator closed the connection
+            }
+            std::istream lines{&input};
+            std::string ignored;
+            std::getline(lines, ignored);
+            boost::asio::write(socket, boost::asio::buffer(reply_), ec);
+            if (ec) {
+                return;
+            }
+        }
+    }
+
+    std::string reply_;
+    boost::asio::io_context io_;
+    boost::asio::ip::tcp::acceptor acceptor_{io_, {boost::asio::ip::make_address("127.0.0.1"), 0}};
+    std::vector<std::jthread> serving_;   // joined after accept_thread_ (declared last, destroyed first)
+    std::jthread accept_thread_;
+};
+
+TEST(LoadgenFakeServer, RepliesOfTheWrongTypeAreCountedAsErrors) {
+    // "OK" is right for the populate SETs, wrong for every GET.
+    const FakeServer server{"OK\r\n", 2};
+    LoadOptions o;
+    o.port = server.port();
+    o.clients = 1;
+    o.keys = 10;
+    o.read_percent = 100;
+    o.duration = std::chrono::milliseconds{300};
+    o.warmup = std::chrono::milliseconds{0};
+    const LoadReport r = cppkv::loadgen::run_load(o);
+
+    ASSERT_TRUE(r.failure.empty()) << r.failure;
+    EXPECT_GT(r.gets, 0U);
+    EXPECT_EQ(r.errors, r.gets);
+}
+
+TEST(LoadgenFakeServer, ErrorRepliesAreCountedAsErrors) {
+    const FakeServer server{"ERR INTERNAL write not persisted\r\n", 1};
+    LoadOptions o;
+    o.port = server.port();
+    o.clients = 1;
+    o.populate = false;
+    o.read_percent = 0;   // SET only
+    o.duration = std::chrono::milliseconds{300};
+    o.warmup = std::chrono::milliseconds{0};
+    const LoadReport r = cppkv::loadgen::run_load(o);
+
+    ASSERT_TRUE(r.failure.empty()) << r.failure;
+    EXPECT_GT(r.sets, 0U);
+    EXPECT_EQ(r.errors, r.sets);
+}
+
+TEST(LoadgenFakeServer, AFailedPopulateIsReportedAsAFailure) {
+    const FakeServer server{"ERR INTERNAL write not persisted\r\n", 1};
+    LoadOptions o;
+    o.port = server.port();
+    o.keys = 10;
+    const LoadReport r = cppkv::loadgen::run_load(o);
+    EXPECT_NE(r.failure.find("populating the store failed"), std::string::npos) << r.failure;
 }
 
 TEST(LoadgenNoServer, ConnectionRefusedIsAFailureNotAnException) {
